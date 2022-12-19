@@ -1,0 +1,71 @@
+{% include "header.html" %}
+
+  <!-- Page Header -->
+  <header class="masthead" style="background-image: url('https://images.unsplash.com/photo-1470092306007-055b6797ca72?ixlib=rb-1.2.1&auto=format&fit=crop&w=668&q=80')">
+    <div class="overlay"></div>
+    <div class="container">
+      <div class="row">
+        <div class="col-lg-8 col-md-10 mx-auto">
+          <div class="site-heading">
+            <h1>Pimsleur Flashcards</h1>
+            <span class="subheading">Remember faster better</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+
+  <div class="container">
+    <div class="row">
+      <div class="col-lg-8 col-md-10 mx-auto">
+        {% include 'flash_messages.html' %}
+        {% for card in all_cards %}
+        {%- if loop.index >= 10 %} That was 10! {% endif %}
+        <div class="post-preview">
+          <a href="{{ url_for('show_card', card_id=card.id) }}">
+            <h2 class="post-title">
+              {{card.title}}
+            </h2>
+            <h3 class="post-subtitle">
+              {{card.subtitle}}
+            </h3>
+          </a>
+          <p class="post-meta">Added by
+          {% for user in all_users %}
+<!--            <a href="#">User ID: {{  user.id  }}</a>-->
+<!--            <a href="#">card author ID: {{  card.author_id  }}</a>-->
+<!--            <a href="#">User name: {{  user.name  }}</a>-->
+
+<!--            {% if user.id | string() == card.author_id | string() %}-->
+<!--              <a href="#">{{  user.name  }}</a>-->
+<!--            {% endif %}-->
+<!--          {% endfor %}-->
+
+<!--            <a href="#">{{ all_users | selectattr('id' | string(), 'equalto', 'card.author_id' | string()) | selectattr('name') | list | first() }}</a>-->
+<!--        Several false starts. Then:-->
+            {{ card.author.name }}
+            on {{ card.date_created }}
+
+            {% if is_admin %}
+            <a href="{{url_for('delete_card', card_id=card.id) }}">✘</a>
+            {% endif %}
+          </p>
+        </div>
+        <hr>
+        {% endfor %}
+
+
+        <!-- New card-->
+        {% if is_admin %}
+        <div class="clearfix">
+          <a class="btn btn-primary float-right" href="{{url_for('add_new_card')}}">Create New Flashcard</a>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <hr>
+
+{% include "footer.html" %}

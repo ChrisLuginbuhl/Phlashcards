@@ -1,0 +1,74 @@
+{% include "header.html" %}
+{% import "bootstrap/wtf.html" as wtf %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles-cards.css') }}">
+
+  <!-- Page Header -->
+  <header class="masthead" style="background-image: url('{{ card.img_url }}')">
+    <div class="overlay"></div>
+    <div class="container">
+      <div class="row">
+        <div class="col-lg-8 col-md-10 mx-auto">
+          <div class="post-heading">
+            <h1>{{ card.title }}</h1>
+            <h2 class="subheading">{{ card.subtitle }}</h2>
+            <span class="meta">Added by
+<!--              {% for user in all_users %}-->
+<!--                {% if user.id | string == card.author_id | string %}-->
+<!--                  <a href="#">{{ user.name }}</a>-->
+<!--                {% endif %}-->
+<!--              {% endfor %}-->
+
+<!--              Rather than all of the above, use the back populated card.author attribute. It is a User object.-->
+              {{ card.author.name }}
+              on {{ card.date_created }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Card Content -->
+  <article>
+    <div class="container">
+      <div class="row">
+        <div class="col-lg-8 col-md-10 mx-auto">
+            {{ card.body|safe }}
+          <hr>
+            {% if is_admin %}
+              <div class="clearfix">
+              <a class="btn btn-primary float-right" href="{{url_for('edit_card', card_id=card.id)}}">Edit Card</a>
+              </div>
+            {% endif %}
+
+
+<!--           Comments Area -->
+          <div class="col-lg-8 col-md-10 mx-auto comment">
+            {{ ckeditor.load() }}
+            {{ ckeditor.config(name='text') }}
+            {{ wtf.quick_form(form, novalidate=True, button_map={"submit": "primary"}) }}
+              <ul class="commentList">
+                {% if comments %}
+                {% for comment in comments %}
+                <li>
+                    <div class="commenterImage">
+<!--                      <img src="https://pbs.twimg.com/profile_images/744849215675838464/IH0FNIXk.jpg"/>-->
+                        <img src="{{ comment.comment_author.email | gravatar }}"/>
+                    </div>
+                    <div class="commentText">
+                      <p>{{ comment.text | safe }}</p>
+                      <span class="date sub-text">{{ comment.comment_author.name }}</span>
+                    </div>
+                </li>
+                {% endfor %}
+                {% endif %}
+              </ul>
+            </div>
+
+
+          </div>
+      </div>
+    </div>
+  </article>
+
+  <hr>
+{% include "footer.html" %}

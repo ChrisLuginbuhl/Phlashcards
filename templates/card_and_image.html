@@ -1,0 +1,51 @@
+<!--<!doctype html>-->
+<!--<html lang="en">-->
+<!--<head>-->
+<!--    <meta charset="utf-8">-->
+<!--    <meta name="viewport" content="width=device-width, initial-scale=1">-->
+<!--    <meta name="description" content="">-->
+<!--   -->
+<!--    <title>Phlashcards</title>-->
+
+<!--    <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">-->
+<!--    &lt;!&ndash; Custom styles for this template &ndash;&gt;-->
+<!--    <link href="{{ url_for('static', filename='css/heroes.css') }}" rel="stylesheet">-->
+<!--</head>-->
+<!--<body>-->
+
+<!--<main>-->
+{% include "header.html" %}
+    <div class="
+      {% if dark_mode %}
+        bg-dark
+      {% endif %}
+      px-4 pt-5 my-5 text-center border-bottom">
+        <h1 class="
+    {% if dark_mode %}
+      text-white
+    {% endif %}
+    display-5 fw-bold">{{ card.title }}</h1>
+        {% include 'flash_messages.html' %}
+        <div class="col-lg-6 mx-auto">
+            <div class="lead mb-4
+      {% if dark_mode %}
+        bg-dark text-secondary px-4 py-5 text-center
+      {% endif %}
+      ">{{ card.body | safe }}</div>
+      <!--            Note if you want to display html tags in card.body (which is a cross site scripting vulnerability), use card.body | safe-->
+            <div class="d-grid gap-2 d-sm-flex justify-content-sm-center mb-5">
+                <a autofocus class="btn btn-primary btn-lg px-4 me-sm-3" href="{{url_for('show_card')}}">Next Card</a>
+                <a class="btn btn-outline-info btn-lg px-4 me-sm-3 fw-bold" href="{{url_for('add_new_card')}}">Add New</a>
+                 <a class="btn btn-outline-info btn-lg px-4 me-sm-3 fw-bold" href="{{url_for('edit_card', card_id=card.id )}}">Edit</a>
+                <a class="btn btn-outline-secondary btn-lg px-4" href="{{url_for('show_card')}}">Skip for Today</a>
+            </div>
+        </div>
+        <div class="container px-5">
+            <img src="{{ card.img_url }}" class="img-fluid border rounded-3 shadow-lg mb-4" alt="Example image"
+                 width="100%" height="auto" loading="eager">
+        </div>
+    </div>
+</main>
+<script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+</body>
+</html>
