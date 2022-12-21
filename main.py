@@ -22,8 +22,6 @@ from flask_ckeditor import CKEditor
 from datetime import date
 from datetime import timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.orm import relationship
 from flask_login import UserMixin, login_user, LoginManager, login_required, current_user, logout_user
 from forms import CreateCardForm, CreateCommentForm, RegisterForm, LoginForm
 from secrets import token_hex
@@ -32,18 +30,16 @@ import random
 from collections import namedtuple
 import bleach
 from pyairtable import Api, Base, Table
-
-
+from pyairtable.formulas import match
 from flask_debugtoolbar import DebugToolbarExtension
 
 # Run Pydoc window with: python -m pydoc -p <port_number>
-# When using heroku, gunicorn, need to have Procfile in root directory.
 
 # TODO 1: Check all routes on debug toolbar "routes" e.g. /ckeditor/static/<path:filename> for login_required
 
-FREQUENCY_DECAY_RATE = 5  # lower number makes frequency of cards decline faster
-
 QUEUE_SIZE = 3
+
+# FREQUENCY_DECAY_RATE = 5  # lower number makes frequency of cards decline faster
 EXP_WEIGHTS = [1.0, 0.8187307530779818, 0.6703200460356393, 0.5488116360940265, 0.44932896411722156,
                0.36787944117144233, 0.30119421191220214, 0.24659696394160652, 0.2018965179946554, 0.16529888822158656,
                0.1353352832366127, 0.11080315836233387, 0.09071795328941253, 0.07427357821433389, 0.06081006262521799,
@@ -53,101 +49,37 @@ EXP_WEIGHTS = [1.0, 0.8187307530779818, 0.6703200460356393, 0.5488116360940265, 
 # (you also need to import math to run this)
 # MAX_INFREQUENCY = 20  # num_views above which frequency stops declining
 
+Card_data = namedtuple('Card_data', ['id', 'num_views', 'initial_frequency', 'weight'])
+
 Flask.secret_key = token_hex(16)
 app = Flask(__name__)
 # app.config['SECRET_KEY'] = token_hex(32)
 app.config['SECRET_KEY'] = os.environ.get('APP_SECRET_KEY')
 ckeditor = CKEditor(app)
 Bootstrap(app)
-
-##CONNECT TO SQLALCHEMY DB
-# app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///flashcards.db'  # for running local db file
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL',
-                                                       'sqlite:///flashcards.db')  # for running postgres on heroku
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.debug = True  # This is for debug toolbar
-db = SQLAlchemy(app)
 
 ## CONNECT TO AIRTABLE AS DB
-# airtable_api_key = os.environ.get('AIRTABLE_API_KEY')
-# airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
-#
-# airtable_table_name = 'table1'
-# api = Api(airtable_api_key)
-# # Base IDs begin with "app"
-# # Table IDs begin with "tbl"
-# # View IDs begin with "viw"
-# # Record IDs begin with "rec"
+airtable_api_key = os.environ.get('AIRTABLE_API_KEY')
+airtable_base_id = os.environ.get('AIRTABLE_BASE_ID')
 
-# airtable_data = api.all(airtable_base_id, airtable_table_name)
-# base = Base('apikey', 'base_id')
-# base.all('table_name')
-
-# table = Table(airtable_api_key, airtable_base_id, airtable_table_name)
-# print(f'airtable api token: {airtable_api_key}')
-# print(f'airtable base id: {airtable_base_id}')
-# airtable_data = table.all()
-# print(f'airtable data: {airtable_data}')
-
+airtable_cards_table_name = 'cards_table'
+airtable_user_table_name = 'users_table'
+api = Api(airtable_api_key)
+card_table = Table(airtable_api_key, airtable_base_id, airtable_cards_table_name)
+user_table = Table(airtable_api_key, airtable_base_id, airtable_user_table_name)
 login_manager = LoginManager()
 login_manager.init_app(app)
 
 # toolbar = DebugToolbarExtension(app)
-Card_data = namedtuple('Card_data', ['id', 'num_views', 'initial_frequency', 'weight'])
 
 
-##CONFIGURE TABLES
-class User(UserMixin, db.Model):
-    __tablename__ = 'users'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(250), nullable=False)
-    email = db.Column(db.String(250), unique=True, nullable=False)
-    password_hash = db.Column(db.String(250), nullable=False)
-    # This will act like a List of Flashcard objects attached to each User.
-    # The "author" refers to the author property in the Flashcard class.
-    cards = relationship('Flashcard', back_populates='author')
-    comments = relationship('Comment', back_populates='comment_author')
-
-    def __repr__(self):
-        return f'User: {self.name}'
-
-
-class Flashcard(db.Model):
-    __tablename__ = "flashcards"
-    id = db.Column(db.Integer, primary_key=True)
-    # Create Foreign Key, "users.id" the users refers to the tablename of User.
-    author_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    # Create reference to the User object, the "cards" refers to the cards property in the User class.
-    author = relationship("User", back_populates='cards')
-    comments = relationship("Comment", back_populates='parent_card')
-    title = db.Column(db.String(250), unique=True, nullable=False)
-    date_created = db.Column(db.String(250), nullable=False)
-    body = db.Column(db.Text, nullable=False)
-    reverse_body = db.Column(db.Text, nullable=False)
-    img_url = db.Column(db.String(250), nullable=False)
-    num_views = db.Column(db.Integer, nullable=False)
-    last_viewed = db.Column(db.String(250), nullable=False)
-    tags = db.Column(db.String(250))
-    initial_frequency = db.Column(db.Integer, nullable=False)
-    comments = relationship("Comment", back_populates='parent_card')
-
-    def __repr__(self):
-        return f'Card: {self.title}'
-
-
-class Comment(db.Model):
-    __tablename__ = "comments"
-    id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.String(2500), unique=True, nullable=False)
-    parent_card = relationship("Flashcard", back_populates='comments')
-    author_id = db.Column(db.String(250), db.ForeignKey('users.id'))
-    comment_author = relationship("User", back_populates='comments')
-    parent_card_id = db.Column(db.String(250), db.ForeignKey('flashcards.id'))
-
-    # date = db.Column(db.String(250), nullable=False)
-
-    def __repr__(self):
-        return f'Comment on: {self.parent_card.title}, by {self.comment_author}'
+class User(UserMixin):
+    def __init__(self, user_name, email, password_hash, id=0,):
+        self.id = id
+        self.user_name = user_name
+        self.email = email
+        self.password_hash = password_hash
 
 
 class Schedule:
@@ -160,12 +92,12 @@ class Schedule:
     # initial_frequency, num_views (in db) and the weights that decrease with increasing number of views.
     #
     # Steps:
-    # 1. Get card id, initial_frequency, num_views, skip_for_today from database.
+    # 1. Get all card id, initial_frequency, num_views, skip_for_today from database (don't load images, body, etc)
     # 2. Calculate weights (initial_frequency * exponential decay according to num views)
     # 3. Create a list of eligible cards (cards not in the queue already, not skip for today, etc)
     # 4. Pick a card from this list randomly, add it to the end of the queue
     # 5. repeat 3, 4 until queue is full
-    # 6. Draw card from front of queue, remove it from queue
+    # 6. Draw card from front of queue and display it, remove it from queue
     # 7. Repeat 1-6 forever
 
     def __init__(self):
@@ -186,12 +118,10 @@ class Schedule:
     def get_all_card_info(self):
         # Retrieves data from all cards in database and returns it in a list of
         # named tuples including calculated weights
-        all_cards = db.session.query(Flashcard.id, Flashcard.num_views, Flashcard.initial_frequency).all()
-        # ^ The query above returns a "result proxy" type, not a tuple as
-        # its __str__ representation suggests. Get each list value from this type using dot notation for attributes
-        ids = [card.id for card in all_cards]
-        num_views = [card.num_views for card in all_cards]
-        initial_frequencies = [card.initial_frequency for card in all_cards]
+        card_data = card_table.all()
+        ids = [card['fields']['card_id'] for card in card_data]
+        num_views = [card['fields']['num_views'] for card in card_data]
+        initial_frequencies = [card['fields']['initial_frequency'] for card in card_data]
         weights = [init_freq * EXP_WEIGHTS[num_views[idx]] for idx, init_freq in enumerate(initial_frequencies)]
         # ^ weights are calculated as: (initial frequency) * (exp_weight corresponding to num_views)
         return [Card_data(id, num_views[idx], initial_frequencies[idx], weights[idx]) for idx, id in enumerate(ids)]
@@ -199,7 +129,7 @@ class Schedule:
 
     # def adjust_frequency(self, card_id: int, adj=1):
 
-    def get_next_card(self) -> int:  # card_id
+    def get_next_card(self) -> int:
         # queue = list(dict.fromkeys(queue))  # removes duplicates
         card = self.queue.pop(0)
         all_cards = self.get_all_card_info()
@@ -209,14 +139,20 @@ class Schedule:
 
 
 # HELPER FUNCTIONS
-def make_hash(password):  # returns 'method$salt$hash'
+def make_hash(password):  # returns 'method:salt:hash'
     return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
 
 
-# This function is required by the login manager.
+# This function is required by Flask Login Manager.
 @login_manager.user_loader
-def load_user(user_id):
-    user = User.query.get(user_id)
+def load_user(id):
+    user_data = user_table.first(formula=match({"user_id": id}))['fields']
+    user = User(
+        id=user_data['user_id'],
+        user_name=user_data['user_name'],
+        email=user_data['email'],
+        password_hash=user_data['password_hash']
+    )
     return user
 
 
@@ -228,7 +164,7 @@ def is_admin():
         return False
 
 
-# This is a decorator function
+# Decorator functions
 def admin_only(func):
     @wraps(func)
     # This line is required so that flask doesn't see the multiple routes assigned to the same function ('wrapper')
@@ -242,7 +178,7 @@ def admin_only(func):
         return func(*args, **kwargs)
     return wrapper
 
-#another decorator function
+
 def logged_in_only(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -252,89 +188,32 @@ def logged_in_only(func):
     return wrapper
 
 
-def initialize_db():
-    db.create_all()
-    new_user = User(
-        name="Chris",
-        email="a@b.c",
-        password_hash=make_hash(os.environ.get('TEST_PASSWORD')),
-        cards=[
-            Flashcard(
-                title="A Life of Cactus",
-                date_created=date.today().strftime("%B %d, %Y"),
-                body='blah blah blah...',
-                img_url='https://www.gardeningknowhow.com/wp-content/uploads/2021/01/golden-barrel-cactus-1536x1152.jpg',
-                reverse_body='Backside of card.',
-                num_views=0,
-                initial_frequency=4,
-                tags="test falcor",
-                last_viewed=(date.today() - timedelta(days=1)).strftime("%B %d, %Y"),
-            ),
-            Flashcard(
-                title="Item 2",
-                date_created=date.today().strftime("%B %d, %Y"),
-                body='Important text that is to be read and re-read.',
-                img_url='https://s.udemycdn.com/partner-logos/v4/nasdaq-light.svg',
-                reverse_body='Backside of card.',
-                num_views=10,
-                initial_frequency=2,
-                tags="test important",
-                last_viewed=(date.today() - timedelta(days=1)).strftime("%B %d, %Y"),
-            ),
-            Flashcard(
-                title="Item 3",
-                date_created=date.today().strftime("%B %d, %Y"),
-                body='Something so important it needs to be written down.',
-                img_url='https://s.udemycdn.com/partner-logos/v4/netapp-light.svg',
-                reverse_body='Backside of card.',
-                num_views=0,
-                initial_frequency=40,
-                tags="test not_important",
-                last_viewed=(date.today() - timedelta(days=1)).strftime("%B %d, %Y"),
-            )
-        ])
-    db.session.add(new_user)
-    db.session.commit()
-
-
-@app.route('/index')
-@logged_in_only
-def get_all_cards():
-    # if not current_user.is_authenticated:
-    #     return redirect(url_for('login'))
-    cards = Flashcard.query.all()
-    users = User.query.all()
-    print(f'Getting cards. First card title: {cards[0].title}, Author id: {cards[0].author_id}')
-    sched.get_next_card()
-    return render_template("index.html",
-                           all_cards=cards,
-                           all_users=users,
-                           logged_in=current_user.is_authenticated,
-                           is_admin=is_admin()
-                           )
-
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     form = RegisterForm()
     if form.validate_on_submit():
-        if User.query.filter_by(email=request.form.get('email')).first():
-            # if User.query.filter_by(email=request.form.get('email')).first():
-            print(
-                f'Trying to add email: {request.form.get("email")}. Found: {User.query.filter_by(email=request.form.get("email"))}')
+        formula = match({"email": request.form.get('email').lower()})
+        user_data_raw = user_table.first(formula=formula)
+        if user_data_raw:
+            user_data = user_data_raw['fields']
+            print(f'Trying to add email: {request.form.get("email")}. Found: {user_data["email"]}')
             flash('Email already in use. Log in instead')
             return redirect(url_for('login'))
-        user = User(
-            name=request.form.get('name'),
-            email=request.form.get('email').lower(),
-            password_hash=make_hash(request.form.get('password'))
-            # or name=form.name.data,
-            #    email=form.email.data...
+        response_from_db = user_table.create(
+            {'user_name':request.form.get('name'),
+            'email':request.form.get('email').lower(),
+            'password_hash':make_hash(request.form.get('password'))},
         )
-        print(user)
-        db.session.add(user)
-        db.session.commit()
-        db.session.refresh(user)
+        print(f'Registered new user with database: {response_from_db}')
+        user_data = response_from_db['fields']
+        user = User(
+            id=user_data['user_id'],
+            user_name=user_data['user_name'],
+            email=user_data['email'],
+            password_hash=user_data['password_hash']
+        )
+        # user.id = user.user_id
         login_user(user)
         flash('Registered and logged in')
         return redirect(url_for('get_all_cards'))
@@ -347,7 +226,15 @@ def login():
         return redirect(url_for('show_card'))
     form = LoginForm()
     if request.method == 'POST':
-        user = User.query.filter_by(email=request.form.get('email').lower()).first()
+        # user = User.query.filter_by(email=request.form.get('email').lower()).first()
+        formula = match({"email": request.form.get('email')})
+        user_data = user_table.first(formula=formula)['fields']
+        user = User(
+            id=user_data['user_id'],
+            user_name=user_data['user_name'],
+            email=user_data['email'],
+            password_hash=user_data['password_hash']
+        )
         print(f'User: {user}')
         if user:
             if check_password_hash(user.password_hash, request.form.get('password')):
@@ -370,17 +257,12 @@ def logout():
 
 
 @app.route("/")
-@logged_in_only
+# @logged_in_only
 def show_card():
     card_id = request.args.get("card_id")
     if not card_id:
         card_id =sched.get_next_card()
-    requested_card = Flashcard.query.get(card_id)
-    comments = Comment.query.filter_by(parent_card=requested_card)
-    comment_form = CreateCommentForm()
-    # db.session.add(comment)
-    # db.session.commit()
-    flash("Num_views updated successfully")
+    requested_card = card_table.first(formula=match({"card_id": card_id}))['fields']
     return render_template("card_and_image.html",
                            card=requested_card,
                            # comments=comments,
@@ -388,6 +270,20 @@ def show_card():
                            is_admin=is_admin(),
                            logged_in=current_user.is_authenticated,
                            dark_mode=False,
+                           )
+
+
+@app.route('/index')
+@logged_in_only
+def get_all_cards():
+    card_data_raw = card_table.all(fields=['card_id', 'title', 'body', 'author', 'date_created'])
+    card_data_unsorted = [card["fields"] for card in card_data_raw]
+    card_data = sorted(card_data_unsorted, key=lambda card: card['card_id'])
+    print(f'card data: {card_data}')
+    return render_template("index.html",
+                           all_cards=card_data,
+                           logged_in=current_user.is_authenticated,
+                           is_admin=is_admin()
                            )
 
 
@@ -423,18 +319,8 @@ def add_comment(card_id):
                            )
 
 
-@app.route("/about")
-def about():
-    return render_template("about.html")
-
-@logged_in_only
-@app.route("/contact")
-def contact():
-    return render_template("contact.html")
-
-
 @app.route("/new-card", methods=['GET', 'POST'])
-# @logged_in_only
+@logged_in_only
 def add_new_card():
     form = CreateCardForm()
     if form.validate_on_submit():
@@ -466,7 +352,6 @@ def edit_card(card_id):
         img_url=card.img_url,
         author=card.author,
         body=card.body,
-
     )
     if edit_form.validate_on_submit():
         card.title = edit_form.title.data
@@ -487,6 +372,16 @@ def delete_card(card_id):
     db.session.commit()
     return redirect(url_for('get_all_cards'))
 
+
+@app.route("/about")
+def about():
+    return render_template("about.html")
+
+
+@logged_in_only
+@app.route("/contact")
+def contact():
+    return render_template("contact.html")
 
 # initialize_db()  # only need to do this the first time the code is run
 sched = Schedule()
