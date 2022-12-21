@@ -13,3 +13,7 @@ Since this may be served on the public web, a register/login/admin priviliges sy
 When running from a local database, uncomment the line "initialize_db()" near the bottom of main.py for first run, then comment it out again.
 
 Use 127.0.0.1:5001/ for local host and to use the app. 
+
+Licensed under Creative Commons:
+Attribution-NonCommercial-ShareAlike 4.0 International
+CC-BY-NC-SA
