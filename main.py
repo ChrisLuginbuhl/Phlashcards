@@ -23,7 +23,7 @@ from datetime import date
 from datetime import timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import UserMixin, login_user, LoginManager, login_required, current_user, logout_user
-from forms import CreateCardForm, CreateCommentForm, RegisterForm, LoginForm
+from forms import CreateCardForm, RegisterForm, LoginForm
 from secrets import token_hex
 from functools import wraps
 import random
@@ -32,6 +32,8 @@ import bleach
 from pyairtable import Api, Base, Table
 from pyairtable.formulas import match
 from flask_debugtoolbar import DebugToolbarExtension
+import requests
+import logging
 
 # Run Pydoc window with: python -m pydoc -p <port_number>
 
@@ -49,15 +51,17 @@ EXP_WEIGHTS = [1.0, 0.8187307530779818, 0.6703200460356393, 0.5488116360940265, 
 # (you also need to import math to run this)
 # MAX_INFREQUENCY = 20  # num_views above which frequency stops declining
 
-Card_data = namedtuple('Card_data', ['id', 'num_views', 'initial_frequency', 'weight'])
+Card_data = namedtuple('Card_data', ['rec_id', 'id', 'num_views', 'initial_frequency', 'weight'])
 
 Flask.secret_key = token_hex(16)
 app = Flask(__name__)
-# app.config['SECRET_KEY'] = token_hex(32)
 app.config['SECRET_KEY'] = os.environ.get('APP_SECRET_KEY')
 ckeditor = CKEditor(app)
 Bootstrap(app)
 app.debug = True  # This is for debug toolbar
+toolbar = DebugToolbarExtension(app)
+logger = logging.getLogger()
+logging.basicConfig(level=logging.DEBUG)
 
 ## CONNECT TO AIRTABLE AS DB
 airtable_api_key = os.environ.get('AIRTABLE_API_KEY')
@@ -71,9 +75,6 @@ user_table = Table(airtable_api_key, airtable_base_id, airtable_user_table_name)
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-# toolbar = DebugToolbarExtension(app)
-
-
 class User(UserMixin):
     def __init__(self, user_name, email, password_hash, id=0,):
         self.id = id
@@ -84,61 +85,108 @@ class User(UserMixin):
 
 class Schedule:
 
-    # Creates a queue of cards according to these rules:
+    # Creates a queue of card ids according to these rules:
     # Pick QUEUE_SIZE cards randomly, according to weights
-    # No duplicates in queue. Add new cards to end, remove from start
+    # No duplicates in queue. Add new cards to end, remove from start in batches of QUEUE_SIZE/2.
+    # Batches prevent frequent db calls, and having a queue larger than the batch prevents getting
+    # the same card twice in a row (or more than once in QUEUE_SIZE/2 cards)
     # Don't add cards to queue if they are marked "skip for today"
     # returns the database id of the next card. This is a weighted random choice. Weights are calculated from the
     # initial_frequency, num_views (in db) and the weights that decrease with increasing number of views.
     #
-    # Steps:
-    # 1. Get all card id, initial_frequency, num_views, skip_for_today from database (don't load images, body, etc)
+    # Get all card info:
+    # * Note - you must have a number of cards in database >= QUEUE_SIZE
+    # 1. Get all record_id, card id, initial_frequency, num_views, skip_for_today from
+    #      database (don't need to load title, images, body, etc)
     # 2. Calculate weights (initial_frequency * exponential decay according to num views)
+    #
+    # Refresh queue:
     # 3. Create a list of eligible cards (cards not in the queue already, not skip for today, etc)
-    # 4. Pick a card from this list randomly, add it to the end of the queue
-    # 5. repeat 3, 4 until queue is full
-    # 6. Draw card from front of queue and display it, remove it from queue
-    # 7. Repeat 1-6 forever
+    # 4. Pick a card from eligible cards list randomly, add it to the end of the queue, remove it from eligible cards list
+    # 5. repeat step 4 until queue is full
+    # 6. Method get_next_card(): Keep an index, and serve this card ID from the queue when asked.
+    # 7. When index reaches end of queue, update num_views (and "do not show today") in db for all cards in queue
+    #   (Option to implement: Also do 7a) if/when no new card for 2 minutes)
+    # 8. Update eligible cards from db (removing everything in queue)
+    # 9. Clear the queue
+    # 10.GOTO step 4
+
+    # Summary:
+    # fill queue with eligible cards, removing them one at a time from eligible cards list
+    # serve cards til end of queue
+    # update num_views (and "do not show today") in db
+    # update eligible cards from db (removing everything in queue)
+    # fill queue from eligible cards
+    #
+
 
     def __init__(self):
+        self.index = 0
         self.queue = []
-        eligible_cards = self.get_all_card_info()
-        for i in range(QUEUE_SIZE):
-            try:
-                self.queue.append(random.choices(eligible_cards, [card.weight for card in eligible_cards], k=1)[0])
-                eligible_cards.pop(eligible_cards.index(self.queue[-1]))  # remove last added card from eligible
-            # ^ Note this step is slow with large numbers of cards because it has to go through each card
-            # For performance, also see 'using lists as queues' in
-            # python docs: https://docs.python.org/3/tutorial/datastructures.html#more-on-lists
-            except:
-                print(
-                    f'An error occurred while filling the queue. Possibly not enough cards to fill queue of {QUEUE_SIZE}')
-        print(f'queue is: {self.queue}')
+        self.eligible_cards = []
 
-    def get_all_card_info(self):
-        # Retrieves data from all cards in database and returns it in a list of
+    def fill_queue(self):
+        # Get eligible cards from queue
+        # Retrieve data from all cards in database and return it in a list of
         # named tuples including calculated weights
-        card_data = card_table.all()
+        card_data = card_table.all(fields = ['card_id', 'num_views', 'initial_frequency'])
+        rec_ids = [card['id'] for card in card_data]
         ids = [card['fields']['card_id'] for card in card_data]
         num_views = [card['fields']['num_views'] for card in card_data]
         initial_frequencies = [card['fields']['initial_frequency'] for card in card_data]
         weights = [init_freq * EXP_WEIGHTS[num_views[idx]] for idx, init_freq in enumerate(initial_frequencies)]
         # ^ weights are calculated as: (initial frequency) * (exp_weight corresponding to num_views)
-        return [Card_data(id, num_views[idx], initial_frequencies[idx], weights[idx]) for idx, id in enumerate(ids)]
+        all_cards = [Card_data(rec_ids[idx], id, num_views[idx], initial_frequencies[idx], weights[idx])
+                for idx, id in enumerate(ids)]
         # ^ List comp of named tuples "Card_data"
+        self.eligible_cards = list(set(all_cards) - set(self.queue)) # much faster than list comp
 
-    # def adjust_frequency(self, card_id: int, adj=1):
+        # Now fill the queue
+        self.queue = []
+        for i in range(QUEUE_SIZE):
+            try:
+                self.queue.append(random.choices(self.eligible_cards,
+                                                 [card.weight for card in self.eligible_cards], k=1)[0])
+                self.eligible_cards.pop(self.eligible_cards.index(self.queue[-1]))
+                # remove last added card from eligible
+            except:
+                logger.error(
+                    f'An error occurred while filling the queue. Possibly not enough cards to fill queue of {QUEUE_SIZE}')
+                abort
+        print(f'queue is: {[card.id for card in self.queue]}')
 
-    def get_next_card(self) -> int:
-        # queue = list(dict.fromkeys(queue))  # removes duplicates
-        card = self.queue.pop(0)
-        all_cards = self.get_all_card_info()
-        eligible_cards = [card for card in all_cards if card not in self.queue]
-        self.queue.append(random.choices(eligible_cards, [card.weight for card in eligible_cards], k=1)[0])
-        return card.id
+    def get_next_card(self) -> Card_data:
+        if not self.queue:
+            self.fill_queue()  # This runs once, when the app opens.
+        next_card = self.queue[self.index]
+        if self.index == QUEUE_SIZE - 1:
+            self.update_db()
+            self.fill_queue()
+            self.index = 0
+        else:
+            self.index += 1
+        return next_card
+
+    def update_db(self):
+        logger.debug('Updating db...')
+
 
 
 # HELPER FUNCTIONS
+def check_is_url_image(image_url):
+   image_formats = ("image/png", "image/jpeg", "image/jpg")
+   r = requests.head(image_url)
+   if r.headers["content-type"] in image_formats:
+      return image_url
+   return 'https://media.istockphoto.com/vectors/broken-chain-link-icon-vector-concept-demage-connection-or-j' \
+          'oin-in-vector-id1165216254?k=6&m=1165216254&s=170667a&w=0&h=-jie62m9pcNwUA3V0mYzvCCtQvZoj8T7dDWDZ7gHDaQ='
+
+def sanitize(raw_title, raw_body, raw_img_url):
+    body = bleach.clean(raw_body, tags=['em', 'p', 'i', 'br'])
+    title = bleach.clean(raw_title)
+    img_url = check_is_url_image(raw_img_url)
+    return title, body, img_url
+
 def make_hash(password):  # returns 'method:salt:hash'
     return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
 
@@ -261,7 +309,7 @@ def logout():
 def show_card():
     card_id = request.args.get("card_id")
     if not card_id:
-        card_id =sched.get_next_card()
+        card_id =sched.get_next_card().id
     requested_card = card_table.first(formula=match({"card_id": card_id}))['fields']
     return render_template("card_and_image.html",
                            card=requested_card,
@@ -291,28 +339,9 @@ def get_all_cards():
 @logged_in_only
 def add_comment(card_id):
     card_id = request.args.get("id")
-    if not card_id:
-        requested_card = Flashcard.query.get(card_id)
-    comments = Comment.query.filter_by(parent_card=requested_card)
-    comment_form = CreateCommentForm()
-
-    if comment_form.validate_on_submit():
-        if not current_user.is_authenticated:
-            flash("You must be logged in to comment")
-            return redirect(url_for('login'))
-        comment = Comment(
-            comment_author=current_user,
-            text=comment_form.body.data,
-            parent_card_id=card_id,
-            # date=date.today().strftime("%B %d, %Y")
-        )
-        db.session.add(comment)
-        db.session.commit()
-        flash("Comment submitted successfully")
+    ##  TODO: Get card from database
     return render_template("card_and_image.html",
                            card=requested_card,
-                           # comments=comments,
-                           # form=comment_form,
                            is_admin=is_admin(),
                            logged_in=current_user.is_authenticated,
                            dark_mode=True,
@@ -322,22 +351,20 @@ def add_comment(card_id):
 @app.route("/new-card", methods=['GET', 'POST'])
 @logged_in_only
 def add_new_card():
-    form = CreateCardForm()
+    form = CreateCardForm(num_views=0, initial_frequency=1)
     if form.validate_on_submit():
         # clean_html_body = BeautifulSoup(form.body.data).get_text()
-        new_card = Flashcard(
-            title=form.title.data,
-            body=bleach.clean(form.body.title),
-            img_url=form.img_url.data,
-            author=current_user,
-            reverse_body="Nothing here",
-            date_created=date.today().strftime("%B %d, %Y"),
-            last_viewed=date.today().strftime("%B %d, %Y"),
-            num_views=0,
-            initial_frequency=1,
-        )
-        db.session.add(new_card)
-        db.session.commit()
+        title, body, img_url = sanitize(form.title.data, form.body.data, form.img_url.data)
+        response = card_table.create({
+            'title': title,
+            'img_url': img_url,
+            'author': current_user.user_name,
+            'body': body,
+            'num_views': form.num_views.data,
+            'initial_frequency': form.initial_frequency.data,
+            # date_created etc
+        })
+        print(f'New card created. Response: {response}')
         return redirect(url_for("get_all_cards"))
     return render_template("new-card.html", form=form)
 
@@ -345,22 +372,34 @@ def add_new_card():
 @app.route("/edit-card/<int:card_id>", methods=['GET', 'POST'])
 @admin_only
 def edit_card(card_id):
-    print('running edit_card')
-    card = Flashcard.query.get(card_id)
+    formula = match({'card_id': card_id})
+    card_data_raw = card_table.first(formula=formula)
+    rec_id = card_data_raw['id']
+    if card_data_raw:
+        card = card_data_raw['fields']
+    else:
+        flash('404: Link does not exist/no such card')
+        return redirect(url_for('show_card'), 404)
     edit_form = CreateCardForm(
-        title=card.title,
-        img_url=card.img_url,
-        author=card.author,
-        body=card.body,
+        title=card['title'],
+        img_url=card['img_url'],
+        author=card['author'],
+        body=card['body'],
+        num_views=card['num_views'],
+        initial_frequency=card['initial_frequency'],
     )
     if edit_form.validate_on_submit():
-        card.title = edit_form.title.data
-        card.img_url = edit_form.img_url.data
-        # card.author = edit_form.author.data
-        card.body = edit_form.body.data
-        db.session.commit()
-        return redirect(url_for("show_card", card_id=card.id))
-    print(f'rendering new card template. Login status: {current_user.is_authenticated}')
+        title, body, img_url = sanitize(edit_form.title.data, edit_form.body.data, edit_form.img_url.data)
+        card_table.update(
+            rec_id,
+            {
+            'title': title,
+            'img_url': img_url,
+            'body': body,
+            'num_views': edit_form.num_views.data,
+            'initial_frequency': edit_form.initial_frequency.data,
+        })
+        return redirect(url_for("show_card", card_id=card_id))
     return render_template("new-card.html", logged_in=current_user.is_authenticated, is_edit=True, form=edit_form)
 
 

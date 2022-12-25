@@ -1,5 +1,5 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, SubmitField, PasswordField
+from wtforms import StringField, SubmitField, IntegerField, PasswordField
 from wtforms.validators import DataRequired, URL
 from flask_ckeditor import CKEditorField
 
@@ -7,6 +7,8 @@ from flask_ckeditor import CKEditorField
 class CreateCardForm(FlaskForm):
     title = StringField("Blog Post Title", validators=[DataRequired()])
     img_url = StringField("Blog Image URL", validators=[DataRequired(), URL()])
+    num_views = IntegerField("Number of Views")
+    initial_frequency = IntegerField("Initial Frequency (1=normal, 10 = very high, default=1)")
     body = CKEditorField("Blog Content", validators=[DataRequired()])
     submit = SubmitField("Submit Post")
 
