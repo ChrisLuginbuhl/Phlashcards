@@ -8,14 +8,16 @@ It uses training frequency inspired by the Pimsleur language courses to ask you 
 forget them, e.g. after 5 minutes, after 20 minutes, after an hour, after 1 day, 3, days, etc.
 The newest flash cards are shown with the greatest frequency.
 
-It is intended to be deployed using Heroku (for web access from anywhere) and Postgre (for database), or
-using Airtable (for db) and Python Anywhere (now that Heroku is not free!)
+It is intended to be deployed using Airtable (for db) and Python Anywhere (now that Heroku/Postgres is not free!)
 The app also supports multiple users in the same database.
 
 Makes use of some code from Udemy/App Brewery's 100 Days of Code day 64 and 69 for user registration, login, etc.
+
+Uses Flask for rendering html, jinja for variables, flask-wtf for forms, pyairtable for database.
 '''
 
 import os
+import global_constants as gc
 from flask import Flask, render_template, redirect, url_for, flash, request, abort
 from flask_bootstrap import Bootstrap
 from flask_ckeditor import CKEditor
@@ -26,6 +28,7 @@ from flask_login import UserMixin, login_user, LoginManager, login_required, cur
 from forms import CreateCardForm, RegisterForm, LoginForm
 from secrets import token_hex
 from functools import wraps
+import math
 import random
 from collections import namedtuple
 import bleach
@@ -38,20 +41,25 @@ import logging
 # Run Pydoc window with: python -m pydoc -p <port_number>
 
 # TODO 1: Check all routes on debug toolbar "routes" e.g. /ckeditor/static/<path:filename> for login_required
+# TODO 2: Allow uploading images to Firebase or similar for permanent URL
+# TODO 3: implement tags
+# TODO 4: implement tag filters
+# TODO  : card layout for tags
+# TODO 5: Add 'skip for today'
+# TODO 6: ---COMPLETED----Different decay rates?
+# TODO 7: check if max infrequency works, i.e. what happens after 20 views
+# TODO 8: Card layout - buttons at top? swipe left?
+# TODO 9: Implement Delete Card (or Archive Card)
+# TODO 10: Decide what to do with /index. Starred cards? Tags? Oldest/newest/random?
+# TODO 11: ---COMPLETED---Implement frequency decay rate
+# TODO 12: Connect DB tables (author name and ID)
+# TODO 13: Launch 1.0 on PAnywhere
+# TODO 14: Preload body and img for all cards in queue rather than retrieving one at at time
 
-QUEUE_SIZE = 3
 
-# FREQUENCY_DECAY_RATE = 5  # lower number makes frequency of cards decline faster
-EXP_WEIGHTS = [1.0, 0.8187307530779818, 0.6703200460356393, 0.5488116360940265, 0.44932896411722156,
-               0.36787944117144233, 0.30119421191220214, 0.24659696394160652, 0.2018965179946554, 0.16529888822158656,
-               0.1353352832366127, 0.11080315836233387, 0.09071795328941253, 0.07427357821433389, 0.06081006262521799,
-               0.04978706836786395, 0.04076220397836622, 0.03337326996032609, 0.027323722447292562,
-               0.022370771856165605]
-# ^ calculated from this: exp_weights = [math.e ** -(f/FREQUENCY_DECAY_RATE) for f in range(0, MAX_INFREQUENCY)]
-# (you also need to import math to run this)
-# MAX_INFREQUENCY = 20  # num_views above which frequency stops declining
 
-Card_data = namedtuple('Card_data', ['rec_id', 'id', 'num_views', 'initial_frequency', 'weight'])
+
+Card_data = namedtuple('Card_data', ['rec_id', 'id', 'num_views', 'initial_frequency', 'frequency_decay', 'weight'])
 
 Flask.secret_key = token_hex(16)
 app = Flask(__name__)
@@ -84,7 +92,7 @@ class User(UserMixin):
 
 
 class Schedule:
-
+    '''Creates a queue of cards and serves the next card'''
     # Creates a queue of card ids according to these rules:
     # Pick QUEUE_SIZE cards randomly, according to weights
     # No duplicates in queue. Add new cards to end, remove from start in batches of QUEUE_SIZE/2.
@@ -110,14 +118,14 @@ class Schedule:
     # 8. Update eligible cards from db (removing everything in queue)
     # 9. Clear the queue
     # 10.GOTO step 4
-
+    #
     # Summary:
     # fill queue with eligible cards, removing them one at a time from eligible cards list
     # serve cards til end of queue
     # update num_views (and "do not show today") in db
     # update eligible cards from db (removing everything in queue)
     # fill queue from eligible cards
-    #
+
 
 
     def __init__(self):
@@ -129,21 +137,23 @@ class Schedule:
         # Get eligible cards from queue
         # Retrieve data from all cards in database and return it in a list of
         # named tuples including calculated weights
-        card_data = card_table.all(fields = ['card_id', 'num_views', 'initial_frequency'])
+        card_data = card_table.all(fields = ['card_id', 'num_views', 'initial_frequency', 'frequency_decay'])
         rec_ids = [card['id'] for card in card_data]
         ids = [card['fields']['card_id'] for card in card_data]
         num_views = [card['fields']['num_views'] for card in card_data]
+        frequency_decay = [card['fields']['frequency_decay'] for card in card_data]
         initial_frequencies = [card['fields']['initial_frequency'] for card in card_data]
-        weights = [init_freq * EXP_WEIGHTS[num_views[idx]] for idx, init_freq in enumerate(initial_frequencies)]
-        # ^ weights are calculated as: (initial frequency) * (exp_weight corresponding to num_views)
-        all_cards = [Card_data(rec_ids[idx], id, num_views[idx], initial_frequencies[idx], weights[idx])
-                for idx, id in enumerate(ids)]
+        # weights = [init_freq * EXP_WEIGHTS[num_views[idx]] for idx, init_freq in enumerate(initial_frequencies)]
+        weights = [get_weight(init_freq, num_views[idx], frequency_decay[idx]) for idx, init_freq in
+                   enumerate(initial_frequencies)]
+        all_cards = [Card_data(rec_ids[idx], id, num_views[idx], initial_frequencies[idx],
+                               frequency_decay[idx], weights[idx]) for idx, id in enumerate(ids)]
         # ^ List comp of named tuples "Card_data"
-        self.eligible_cards = list(set(all_cards) - set(self.queue)) # much faster than list comp
+        self.eligible_cards = list(set(all_cards) - set(self.queue))  # much faster than list comp
 
         # Now fill the queue
         self.queue = []
-        for i in range(QUEUE_SIZE):
+        for i in range(gc.QUEUE_SIZE):
             try:
                 self.queue.append(random.choices(self.eligible_cards,
                                                  [card.weight for card in self.eligible_cards], k=1)[0])
@@ -151,7 +161,8 @@ class Schedule:
                 # remove last added card from eligible
             except:
                 logger.error(
-                    f'An error occurred while filling the queue. Possibly not enough cards to fill queue of {QUEUE_SIZE}')
+                    f'An error occurred while filling the queue. Possibly not enough cards to fill '
+                    f'queue of {gc.QUEUE_SIZE}')
                 abort
         print(f'queue is: {[card.id for card in self.queue]}')
 
@@ -159,27 +170,34 @@ class Schedule:
         if not self.queue:
             self.fill_queue()  # This runs once, when the app opens.
         next_card = self.queue[self.index]
-        if self.index == QUEUE_SIZE - 1:
+        if self.index == gc.QUEUE_SIZE - 1:
             self.update_db()
             self.fill_queue()
             self.index = 0
         else:
             self.index += 1
+            print(f'Next card: {next_card.id}. '
+                  f'num_views: {next_card.num_views}',
+                  f'Init_freq: {next_card.initial_frequency}, '
+                  f'decay rate: {next_card.frequency_decay}, '
+                  f'weight: {next_card.weight}')
+
+
         return next_card
 
     def update_db(self):
-        logger.debug('Updating db...')
-
+        updates_list = [{'id': card.rec_id, "fields": {"num_views": card.num_views + 1}} for card in self.queue]
+        logger.debug(f'Updates list: {updates_list}')
+        card_table.batch_update(updates_list)
 
 
 # HELPER FUNCTIONS
 def check_is_url_image(image_url):
-   image_formats = ("image/png", "image/jpeg", "image/jpg")
-   r = requests.head(image_url)
-   if r.headers["content-type"] in image_formats:
-      return image_url
-   return 'https://media.istockphoto.com/vectors/broken-chain-link-icon-vector-concept-demage-connection-or-j' \
-          'oin-in-vector-id1165216254?k=6&m=1165216254&s=170667a&w=0&h=-jie62m9pcNwUA3V0mYzvCCtQvZoj8T7dDWDZ7gHDaQ='
+    image_formats = ("image/png", "image/jpeg", "image/jpg")
+    r = requests.head(image_url)
+    if r.headers["content-type"] in image_formats:
+        return image_url
+    return gc.BROKEN_LINK_IMG_URL
 
 def sanitize(raw_title, raw_body, raw_img_url):
     body = bleach.clean(raw_body, tags=['em', 'p', 'i', 'br'])
@@ -189,6 +207,18 @@ def sanitize(raw_title, raw_body, raw_img_url):
 
 def make_hash(password):  # returns 'method:salt:hash'
     return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
+
+def get_weight(initial_freq: int, num_views: int, decay_rate: int) -> float:
+    """returns weight used to randomly select a card. A card's probablility of selection decreases logarithmically
+    with num_views. The rate of decay is determined by decay_rate. decay_rate is 1-10. Higher decay_rate makes
+    frequency of cards decline faster."""
+    if num_views > gc.MAX_INFREQUENCY:
+        num_views = gc.MAX_INFREQUENCY
+    try:
+        weight = initial_freq * math.e ** -(num_views / (gc.FREQUENCY_DECAY_RATE_MAX - decay_rate + 1))
+    except ZeroDivisionError:
+        print('Decay rate must be 1-10. Check database.')
+    return weight
 
 
 # This function is required by Flask Login Manager.
@@ -276,7 +306,12 @@ def login():
     if request.method == 'POST':
         # user = User.query.filter_by(email=request.form.get('email').lower()).first()
         formula = match({"email": request.form.get('email')})
-        user_data = user_table.first(formula=formula)['fields']
+        try:
+            user_data = user_table.first(formula=formula)['fields']
+        except requests.exceptions.ConnectionError:
+            logger.error('Connection error. Error connecting to database (e.g too many retries')
+            flash('Error connecting to database')
+            return redirect(url_for('login'))
         user = User(
             id=user_data['user_id'],
             user_name=user_data['user_name'],
@@ -311,6 +346,7 @@ def show_card():
     if not card_id:
         card_id =sched.get_next_card().id
     requested_card = card_table.first(formula=match({"card_id": card_id}))['fields']
+    # logger.debug(f'Requested card body: {requested_card["body"]}')
     return render_template("card_and_image.html",
                            card=requested_card,
                            # comments=comments,
@@ -325,7 +361,7 @@ def show_card():
 @logged_in_only
 def get_all_cards():
     card_data_raw = card_table.all(fields=['card_id', 'title', 'body', 'author', 'date_created'])
-    card_data_unsorted = [card["fields"] for card in card_data_raw]
+    card_data_unsorted = [card["rec_id"].append(card["fields"]) for card in card_data_raw]
     card_data = sorted(card_data_unsorted, key=lambda card: card['card_id'])
     print(f'card data: {card_data}')
     return render_template("index.html",
@@ -341,7 +377,7 @@ def add_comment(card_id):
     card_id = request.args.get("id")
     ##  TODO: Get card from database
     return render_template("card_and_image.html",
-                           card=requested_card,
+                           card=card_id,
                            is_admin=is_admin(),
                            logged_in=current_user.is_authenticated,
                            dark_mode=True,
@@ -351,7 +387,9 @@ def add_comment(card_id):
 @app.route("/new-card", methods=['GET', 'POST'])
 @logged_in_only
 def add_new_card():
-    form = CreateCardForm(num_views=0, initial_frequency=1)
+    form = CreateCardForm(num_views=0,
+                          initial_frequency=gc.INITIAL_FREQUENCY_DEFAULT,
+                          frequency_decay=gc.FREQUENCY_DECAY_DEFAULT)
     if form.validate_on_submit():
         # clean_html_body = BeautifulSoup(form.body.data).get_text()
         title, body, img_url = sanitize(form.title.data, form.body.data, form.img_url.data)
@@ -362,7 +400,7 @@ def add_new_card():
             'body': body,
             'num_views': form.num_views.data,
             'initial_frequency': form.initial_frequency.data,
-            # date_created etc
+            'frequency_decay': form.frequency_decay.data,
         })
         print(f'New card created. Response: {response}')
         return redirect(url_for("get_all_cards"))
@@ -387,28 +425,30 @@ def edit_card(card_id):
         body=card['body'],
         num_views=card['num_views'],
         initial_frequency=card['initial_frequency'],
+        frequency_decay=card['frequency_decay'],
     )
     if edit_form.validate_on_submit():
         title, body, img_url = sanitize(edit_form.title.data, edit_form.body.data, edit_form.img_url.data)
         card_table.update(
             rec_id,
             {
-            'title': title,
-            'img_url': img_url,
-            'body': body,
-            'num_views': edit_form.num_views.data,
-            'initial_frequency': edit_form.initial_frequency.data,
-        })
+                'title': title,
+                'img_url': img_url,
+                'body': body,
+                'num_views': edit_form.num_views.data,
+                'initial_frequency': edit_form.initial_frequency.data,
+            })
         return redirect(url_for("show_card", card_id=card_id))
     return render_template("new-card.html", logged_in=current_user.is_authenticated, is_edit=True, form=edit_form)
 
 
-@app.route("/delete-card/<int:card_id>")
+@app.route("/archive-card/<int:card_id>")
 @admin_only
-def delete_card(card_id):
-    card_to_delete = Flashcard.query.get(card_id)
-    db.session.delete(card_to_delete)
-    db.session.commit()
+def archive_card(card_id):
+    rec_id = card_table.first(formula=match({"card_id": card_id})['fields'])
+    logger.log(f'Record to archive rec_id: {rec_id}')
+    card_table.update(rec_id, {'archive': 1})
+
     return redirect(url_for('get_all_cards'))
 
 
@@ -422,7 +462,7 @@ def about():
 def contact():
     return render_template("contact.html")
 
-# initialize_db()  # only need to do this the first time the code is run
+
 sched = Schedule()
 
 if __name__ == "__main__":

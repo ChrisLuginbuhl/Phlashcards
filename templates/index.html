@@ -33,7 +33,7 @@
             {{ card['author'] }}
             on {{ card['date_created'] }}
             {% if is_admin %}
-            <a href="{{url_for('delete_card', card_id=card['card_id']) }}">✘</a>
+            <a href="{{url_for('archive_card', rec_id=card['rec_id'], card_id=card['card_id']) }}">✘</a>
             {% endif %}
           </p>
         </div>
