@@ -17,57 +17,73 @@ Uses Flask for rendering html, jinja for variables, flask-wtf for forms, pyairta
 '''
 
 import os
+
+import urllib3.exceptions
+
 import global_constants as gc
 from flask import Flask, render_template, redirect, url_for, flash, request, abort
 from flask_bootstrap import Bootstrap
 from flask_ckeditor import CKEditor
-from datetime import date
-from datetime import timedelta
+import datetime as dt
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import UserMixin, login_user, LoginManager, login_required, current_user, logout_user
-from forms import CreateCardForm, RegisterForm, LoginForm
+from forms import CreateCardForm, RegisterForm, LoginForm, SkipCardForm
 from secrets import token_hex
 from functools import wraps
 import math
 import random
 from collections import namedtuple
-import bleach
 from pyairtable import Api, Base, Table
 from pyairtable.formulas import match
 from flask_debugtoolbar import DebugToolbarExtension
+from bleach import clean
 import requests
 import logging
+import json
 
 # Run Pydoc window with: python -m pydoc -p <port_number>
 
 # TODO 1: Check all routes on debug toolbar "routes" e.g. /ckeditor/static/<path:filename> for login_required
-# TODO 2: Allow uploading images to Firebase or similar for permanent URL
-# TODO 3: implement tags
-# TODO 4: implement tag filters
-# TODO  : card layout for tags
-# TODO 5: Add 'skip for today'
+# TODO 2: * Allow uploading images to Firebase or similar for permanent URL
+# TODO 3: * implement tags. Possibly using this: https://larainfo.com/blogs/bootstrap-5-tags-input-examples
+#             or this https://stackoverflow.com/questions/63702099/how-to-make-a-checkbox-checked-in-jinja2
+#             see this: https://github.com/yairEO/tagify#features under "Build Project"
+# TODO 4: ---COMPLETED--- implement tag filters
+# TODO  : * card layout for tags
+# TODO 5: ---COMPLETED----Implement 'skip for today'
 # TODO 6: ---COMPLETED----Different decay rates?
-# TODO 7: check if max infrequency works, i.e. what happens after 20 views
-# TODO 8: Card layout - buttons at top? swipe left?
+# TODO 7: ---COMPLETED----check if max infrequency works, i.e. what happens after 20 views
+# TODO 8: Swipe for navigation on mobile? https://demo.dsheiko.com/spn/
 # TODO 9: Implement Delete Card (or Archive Card)
 # TODO 10: Decide what to do with /index. Starred cards? Tags? Oldest/newest/random?
 # TODO 11: ---COMPLETED---Implement frequency decay rate
-# TODO 12: Connect DB tables (author name and ID)
+# TODO 12: ---COMPLETED---Connect DB tables (author name and ID) -> maybe not? THis makes updating fields a PITA
 # TODO 13: Launch 1.0 on PAnywhere
-# TODO 14: Preload body and img for all cards in queue rather than retrieving one at at time
+# TODO 14: ** Preload body and img for all cards in queue rather than retrieving one at at time
+# TODO 15: ** Card layout (buttons always at top and bottom?)
+# TODO 16: * Implement 'skip for x days' input
+# TODO 17: Simplify input form: fill default values for frequency decay etc
+# TODO 18: Make images (and various other fields?) optional
+# TODO 19: Dark mode: https://github.com/vinorodrigues/bootstrap-dark-5
+# TODO 20: ** Implement offline mode from local db? Read only, but refreshed on initial fill_queue?
+# TODO 21: Implement multiple page cards/series? Bootstrap carousel?
 
 
+Card_data = namedtuple('Card_data', ['rec_id', 'id', 'num_views', 'initial_frequency', 'frequency_decay', 'weight',
+                                     'tags', 'skip_until'])
 
-
-Card_data = namedtuple('Card_data', ['rec_id', 'id', 'num_views', 'initial_frequency', 'frequency_decay', 'weight'])
+cache_file = 'cache.json'
 
 Flask.secret_key = token_hex(16)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('APP_SECRET_KEY')
 ckeditor = CKEditor(app)
 Bootstrap(app)
+
 app.debug = True  # This is for debug toolbar
+app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
 toolbar = DebugToolbarExtension(app)
+
 logger = logging.getLogger()
 logging.basicConfig(level=logging.DEBUG)
 
@@ -83,8 +99,9 @@ user_table = Table(airtable_api_key, airtable_base_id, airtable_user_table_name)
 login_manager = LoginManager()
 login_manager.init_app(app)
 
+
 class User(UserMixin):
-    def __init__(self, user_name, email, password_hash, id=0,):
+    def __init__(self, user_name, email, password_hash, id=0, ):
         self.id = id
         self.user_name = user_name
         self.email = email
@@ -93,6 +110,7 @@ class User(UserMixin):
 
 class Schedule:
     '''Creates a queue of cards and serves the next card'''
+
     # Creates a queue of card ids according to these rules:
     # Pick QUEUE_SIZE cards randomly, according to weights
     # No duplicates in queue. Add new cards to end, remove from start in batches of QUEUE_SIZE/2.
@@ -126,31 +144,45 @@ class Schedule:
     # update eligible cards from db (removing everything in queue)
     # fill queue from eligible cards
 
-
-
     def __init__(self):
         self.index = 0
         self.queue = []
         self.eligible_cards = []
+        self.excluded_tags = ['Language']
 
     def fill_queue(self):
-        # Get eligible cards from queue
-        # Retrieve data from all cards in database and return it in a list of
-        # named tuples including calculated weights
-        card_data = card_table.all(fields = ['card_id', 'num_views', 'initial_frequency', 'frequency_decay'])
+        """Retrieves selected fields for all db records, calculates weights, makes list of eligible cards, fills queue"""
+        try:
+            card_data = card_table.all(fields=['card_id', 'num_views', 'initial_frequency', 'frequency_decay', 'tags',
+                                               'skip_until'])
+        except requests.exceptions.ConnectionError:
+            logger.error("Connection Error: Unable to reach database.")
+            # TODO: Load cached data
+            # card_data = read_cache()
         rec_ids = [card['id'] for card in card_data]
         ids = [card['fields']['card_id'] for card in card_data]
         num_views = [card['fields']['num_views'] for card in card_data]
         frequency_decay = [card['fields']['frequency_decay'] for card in card_data]
         initial_frequencies = [card['fields']['initial_frequency'] for card in card_data]
+        tags = [card['fields']['tags'] for card in card_data]
+        skip_until = [card['fields']['skip_until'] for card in card_data]
         # weights = [init_freq * EXP_WEIGHTS[num_views[idx]] for idx, init_freq in enumerate(initial_frequencies)]
         weights = [get_weight(init_freq, num_views[idx], frequency_decay[idx]) for idx, init_freq in
                    enumerate(initial_frequencies)]
         all_cards = [Card_data(rec_ids[idx], id, num_views[idx], initial_frequencies[idx],
-                               frequency_decay[idx], weights[idx]) for idx, id in enumerate(ids)]
+                               frequency_decay[idx], weights[idx], tags[idx], skip_until[idx]) for idx, id in
+                     enumerate(ids)]
         # ^ List comp of named tuples "Card_data"
-        self.eligible_cards = list(set(all_cards) - set(self.queue))  # much faster than list comp
-
+        today = dt.date.today()
+        ids_of_cards_in_queue = [card.id for card in self.queue]
+        self.eligible_cards = [
+            card for card in all_cards if
+            card.id not in ids_of_cards_in_queue and
+            (dt.datetime.strptime(card.skip_until, '%Y-%m-%d').date() - today) < dt.timedelta(days=1) and not
+            set(card.tags.split(' ')).intersection(set(self.excluded_tags))
+        ]
+        print(f'Queue is: {[card.id for card in self.queue]}')
+        print(f'Eligible cards are: {sorted([card.id for card in self.eligible_cards])}')
         # Now fill the queue
         self.queue = []
         for i in range(gc.QUEUE_SIZE):
@@ -163,12 +195,11 @@ class Schedule:
                 logger.error(
                     f'An error occurred while filling the queue. Possibly not enough cards to fill '
                     f'queue of {gc.QUEUE_SIZE}')
-                abort
         print(f'queue is: {[card.id for card in self.queue]}')
 
     def get_next_card(self) -> Card_data:
-        if not self.queue:
-            self.fill_queue()  # This runs once, when the app opens.
+        if not self.queue:  # Queue is empty when the app first opens
+            self.fill_queue()
         next_card = self.queue[self.index]
         if self.index == gc.QUEUE_SIZE - 1:
             self.update_db()
@@ -176,41 +207,63 @@ class Schedule:
             self.index = 0
         else:
             self.index += 1
-            print(f'Next card: {next_card.id}. '
-                  f'num_views: {next_card.num_views}',
-                  f'Init_freq: {next_card.initial_frequency}, '
-                  f'decay rate: {next_card.frequency_decay}, '
-                  f'weight: {next_card.weight}')
-
-
+        print(f'Next card: {next_card.id}. '
+              f'Num_views: {next_card.num_views}',
+              f'Init_freq: {next_card.initial_frequency}, '
+              f'Decay rate: {next_card.frequency_decay}, '
+              f'Weight: {next_card.weight}, '
+              f'Tags: {next_card.tags}')
         return next_card
 
-    def update_db(self):
-        updates_list = [{'id': card.rec_id, "fields": {"num_views": card.num_views + 1}} for card in self.queue]
-        logger.debug(f'Updates list: {updates_list}')
-        card_table.batch_update(updates_list)
+    def skip_card(self, card_id: int, days_to_skip: int):
+        try:
+            queue_position = [i for i, card in enumerate(self.queue) if card.id == card_id][0]
+            logger.debug(f'Found card to skip in queue position {queue_position}')
+            self.queue[queue_position] = self.queue[queue_position]._replace(skip_until=str(dt.date.today() +
+                                                                                            dt.timedelta(
+                                                                                                days=days_to_skip)))
+            logger.debug(
+                f"Changed card {card_id}'s skip until to {str(dt.date.today() + dt.timedelta(days=days_to_skip))}")
+            # ^ named tuples are immutable so must replace the whole tuple
+        except IndexError:
+            logger.error(f'Index Error while skipping card {card_id}')
 
+    def update_db(self):
+        updates_list = [{'id': card.rec_id, "fields": {"num_views": card.num_views + 1, "skip_until": card.skip_until}}
+                        for card in self.queue]
+        logger.debug(f'Updates list: {updates_list}')
+        try:
+            card_table.batch_update(updates_list)
+        except requests.exceptions.ConnectionError:
+            logger.error("Connection Error: Unable to reach database.")
+            logger.warning("Unable to update database.")
 
 # HELPER FUNCTIONS
 def check_is_url_image(image_url):
     image_formats = ("image/png", "image/jpeg", "image/jpg")
+    # TODO: Add/test GIF to image formats ^
     r = requests.head(image_url)
     if r.headers["content-type"] in image_formats:
         return image_url
     return gc.BROKEN_LINK_IMG_URL
 
+
 def sanitize(raw_title, raw_body, raw_img_url):
-    body = bleach.clean(raw_body, tags=['em', 'p', 'i', 'br'])
-    title = bleach.clean(raw_title)
+    """uses library bleach to remove html tags (including malicious scripts) and performs other checks on form input
+    There are no checks within db or on output."""
+    body = clean(raw_body, tags=['em', 'p', 'i', 'br'])
+    title = clean(raw_title)
     img_url = check_is_url_image(raw_img_url)
     return title, body, img_url
+
 
 def make_hash(password):  # returns 'method:salt:hash'
     return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
 
+
 def get_weight(initial_freq: int, num_views: int, decay_rate: int) -> float:
     """returns weight used to randomly select a card. A card's probablility of selection decreases logarithmically
-    with num_views. The rate of decay is determined by decay_rate. decay_rate is 1-10. Higher decay_rate makes
+    with num_views. The rate of decay is determined by decay_rate from 1-10. Higher decay_rate makes
     frequency of cards decline faster."""
     if num_views > gc.MAX_INFREQUENCY:
         num_views = gc.MAX_INFREQUENCY
@@ -219,6 +272,22 @@ def get_weight(initial_freq: int, num_views: int, decay_rate: int) -> float:
     except ZeroDivisionError:
         print('Decay rate must be 1-10. Check database.')
     return weight
+
+
+def write_cache(db_metadata):
+    with open(cache_file, 'w') as cache:
+        json.dump(db_metadata, cache, indent=4)
+
+
+def read_cache():
+    with open(cache_file) as cache:
+        cache_data = cache.readlines()
+        db_metadata = [line.json() for line in cache_data]
+
+        # data = pandas.read_json("salaries.json", orient='records')
+        # print(f'Loaded dataframe, size: {data.size}')
+
+        return db_metadata
 
 
 # This function is required by Flask Login Manager.
@@ -254,6 +323,7 @@ def admin_only(func):
             # return redirect(url_for('login'), 403)
             abort(403)
         return func(*args, **kwargs)
+
     return wrapper
 
 
@@ -263,8 +333,8 @@ def logged_in_only(func):
         if not current_user.is_authenticated:
             return redirect(url_for('login'))
         return func(*args, **kwargs)
-    return wrapper
 
+    return wrapper
 
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -279,9 +349,9 @@ def register():
             flash('Email already in use. Log in instead')
             return redirect(url_for('login'))
         response_from_db = user_table.create(
-            {'user_name':request.form.get('name'),
-            'email':request.form.get('email').lower(),
-            'password_hash':make_hash(request.form.get('password'))},
+            {'user_name': request.form.get('name'),
+             'email': request.form.get('email').lower(),
+             'password_hash': make_hash(request.form.get('password'))},
         )
         print(f'Registered new user with database: {response_from_db}')
         user_data = response_from_db['fields']
@@ -338,50 +408,68 @@ def logout():
     return redirect(url_for('login'))
 
 
-
-@app.route("/")
+@app.route("/", methods=['GET', 'POST'])
 # @logged_in_only
 def show_card():
     card_id = request.args.get("card_id")
     if not card_id:
-        card_id =sched.get_next_card().id
+        card_id = sched.get_next_card().id
     requested_card = card_table.first(formula=match({"card_id": card_id}))['fields']
     # logger.debug(f'Requested card body: {requested_card["body"]}')
+    skip_form = SkipCardForm(days_to_skip=1, card_id=card_id)
+    if skip_form.validate_on_submit():
+        logger.debug(f'received back from form - card: {skip_form.card_id.data}, type: {type(skip_form.card_id.data)}, '
+                     f'days to skip: {skip_form.days_to_skip.data}, type: {type(skip_form.days_to_skip.data)}')
+        sched.skip_card(int(skip_form.card_id.data), skip_form.days_to_skip.data)
+        return redirect(url_for("show_card", card_id=card_id))
     return render_template("card_and_image.html",
                            card=requested_card,
-                           # comments=comments,
-                           # form=comment_form,
                            is_admin=is_admin(),
                            logged_in=current_user.is_authenticated,
                            dark_mode=False,
+                           form=skip_form,
                            )
 
 
-@app.route('/index')
-@logged_in_only
+@app.route('/index', methods=['GET', 'POST'])
+# @logged_in_only
 def get_all_cards():
-    card_data_raw = card_table.all(fields=['card_id', 'title', 'body', 'author', 'date_created'])
-    card_data_unsorted = [card["rec_id"].append(card["fields"]) for card in card_data_raw]
-    card_data = sorted(card_data_unsorted, key=lambda card: card['card_id'])
-    print(f'card data: {card_data}')
-    return render_template("index.html",
-                           all_cards=card_data,
-                           logged_in=current_user.is_authenticated,
-                           is_admin=is_admin()
-                           )
+    # TODO: filter tags
+    # if requests.method == 'POST':
+    #   Filter tags
+
+    all_tags = []
+    card_data_raw = card_table.all(fields=['card_id', 'title', 'body', 'author', 'skip_until', 'tags', 'date_created'])
+    if card_data_raw:
+        card_data_unsorted = [card["fields"] for card in card_data_raw]
+        card_data = sorted(card_data_unsorted, key=lambda card: card['card_id'])
+        for card in card_data:
+            print(card['tags'].split(' '))
+        all_tags_nested = [card['tags'].split(' ') for card in card_data]  # a list of lists
+        all_tags = set([item for sublist in all_tags_nested for item in sublist])  # Produces set from flattened list
+        # ^ Is essentially a nested loop, i.e. for sublist in all_tags_nested: for item in sublist: yield item
+        print(f'All tags {all_tags}')
+        return render_template("index.html",
+                               all_cards=card_data,
+                               all_tags=all_tags,
+                               logged_in=current_user.is_authenticated,
+                               is_admin=is_admin()
+                               )
+    flash('Unable to retrieve records from database')
+    return redirect(url_for('login'))
 
 
-@app.route("/card/<int:card_id>", methods=['GET', 'POST'])
-@logged_in_only
-def add_comment(card_id):
-    card_id = request.args.get("id")
-    ##  TODO: Get card from database
-    return render_template("card_and_image.html",
-                           card=card_id,
-                           is_admin=is_admin(),
-                           logged_in=current_user.is_authenticated,
-                           dark_mode=True,
-                           )
+# @app.route("/card/<int:card_id>", methods=['GET', 'POST'])
+# @logged_in_only
+# def add_comment(card_id):
+#     card_id = request.args.get("id")
+#     ##  TODO: Remove this function if redundant
+#     return render_template("card_and_image.html",
+#                            card=card_id,
+#                            is_admin=is_admin(),
+#                            logged_in=current_user.is_authenticated,
+#                            dark_mode=False,
+#                            )
 
 
 @app.route("/new-card", methods=['GET', 'POST'])
@@ -402,7 +490,7 @@ def add_new_card():
             'initial_frequency': form.initial_frequency.data,
             'frequency_decay': form.frequency_decay.data,
         })
-        print(f'New card created. Response: {response}')
+        logger.log(f'New card created. Response: {response}')
         return redirect(url_for("get_all_cards"))
     return render_template("new-card.html", form=form)
 
@@ -413,8 +501,10 @@ def edit_card(card_id):
     formula = match({'card_id': card_id})
     card_data_raw = card_table.first(formula=formula)
     rec_id = card_data_raw['id']
+    # TODO: rec_id is already in sched's queue object. Don't need this query ^
     if card_data_raw:
         card = card_data_raw['fields']
+        print(card)
     else:
         flash('404: Link does not exist/no such card')
         return redirect(url_for('show_card'), 404)
@@ -426,6 +516,7 @@ def edit_card(card_id):
         num_views=card['num_views'],
         initial_frequency=card['initial_frequency'],
         frequency_decay=card['frequency_decay'],
+        tags=card['tags']
     )
     if edit_form.validate_on_submit():
         title, body, img_url = sanitize(edit_form.title.data, edit_form.body.data, edit_form.img_url.data)
@@ -437,9 +528,12 @@ def edit_card(card_id):
                 'body': body,
                 'num_views': edit_form.num_views.data,
                 'initial_frequency': edit_form.initial_frequency.data,
+                'frequency_decay': edit_form.frequency_decay.data,
+                'tags': edit_form.tags.data,
             })
         return redirect(url_for("show_card", card_id=card_id))
-    return render_template("new-card.html", logged_in=current_user.is_authenticated, is_edit=True, form=edit_form)
+    return render_template("new-card.html", logged_in=current_user.is_authenticated, is_edit=True, form=edit_form,
+                           card=card)
 
 
 @app.route("/archive-card/<int:card_id>")

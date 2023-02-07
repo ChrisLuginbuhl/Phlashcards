@@ -12,8 +12,6 @@
           <div class="page-heading">
             {% if is_edit: %}
             <h1>Edit Flashcard</h1>
-            {% elif is_comment %}
-            <h1>Create Comment</h1>
             {% else: %}
             <h1>New Flashcard</h1>
             <span class="subheading">You're going to make a great flashcard!</span>
@@ -27,13 +25,17 @@
   <div class="container">
     <div class="row">
       <div class="col-lg-8 col-md-10 mx-auto">
+
         {{ ckeditor.load() }}
-        {% if is_comment %}
-        {{ ckeditor.config(name='text') }}
-        {% else %}
         {{ ckeditor.config(name='body') }}
+        {{ wtf.quick_form(form, novalidate=True, button_map={"submit": "primary", "cancel": "success"}) }}
+        {% if is_edit: %}
+          <br><br>
+          <h3>Tags: </h3>
+          {% for tag in card.tags.split(' ') %}
+            <a class="btn btn-sm btn-link px-4 me-sm-3">{{ tag }}</a>
+          {% endfor %}
         {% endif %}
-        {{ wtf.quick_form(form, novalidate=True, button_map={"submit": "primary"}) }}
       </div>
     </div>
   </div>
