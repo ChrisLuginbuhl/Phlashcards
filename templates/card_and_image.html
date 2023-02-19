@@ -1,10 +1,13 @@
 {% include "header.html" %}
 {% import "bootstrap/wtf.html" as wtf %}
+    <div class="d-grid gap-2 d-sm-flex pt-5 my-5 justify-content-sm-center">
+        <a autofocus class="btn btn-primary btn-lg px-4 me-sm-3" href="{{url_for('show_card')}}">Next Card</a>
+    </div>
     <div class="
       {% if dark_mode %}
         bg-dark
       {% endif %}
-      px-4 pt-5 my-5 text-center border-bottom">
+      px-4 text-center border-bottom">
         <h1 class="
     {% if dark_mode %}
       text-white
@@ -22,24 +25,25 @@
       <!--            Note if you want to display html tags in card.body (which is a cross site scripting vulnerability), use card.body | safe-->
             <div class="d-grid gap-2 d-sm-flex justify-content-sm-center mb-5">
 <!--        <div class="btn-group d-grid gap-2 d-sm-flex justify-content-sm-center mb-5" role="group">    -->
-                <a autofocus class="btn btn-primary btn-lg px-4 me-sm-3" href="{{url_for('show_card')}}">Next Card</a>
-                <a class="btn btn-outline-info btn-lg px-4 me-sm-3 fw-bold" href="{{url_for('add_new_card')}}">Add New</a>
-                <a class="btn btn-outline-info btn-lg px-4 me-sm-3 fw-bold" href="{{url_for('edit_card', card_id=card['card_id']) }}">Edit</a>
+                <a class="btn btn-sm btn-primary btn-lg px-4 me-sm-3" href="{{url_for('show_card')}}">Next Card</a>
+                <a class="btn btn-sm btn-outline-info btn-lg px-4 me-sm-3 fw-bold" href="{{url_for('edit_card', card_id=card['card_id']) }}">Edit</a>
+                <a class="btn btn-sm btn-outline-info btn-lg px-4 me-sm-3 fw-bold" href="{{url_for('add_new_card')}}">Add New</a>
             </div>
         </div>
+        {% if card['img_url'] %}
         <div class="container px-5">
             <img src="{{ card['img_url'] }}" class="img-fluid border rounded-3 shadow-lg mb-4" alt="Example image"
                  width="100%" height="auto" loading="eager">
         </div>
+        {% endif %}
         <div class="container px-5">
         <br>
-        <h4>Days to skip: </h4>
+        <h4 class="pt-5" >Days to skip: </h4>
         {{ wtf.quick_form(form, novalidate=True, form_type="inline", extra_classes="justify-content-sm-center", button_map={"submit": "primary", "cancel": "success"}) }}
-        <br>
         <h4>Tags: </h4>
-          {% for tag in card.tags.split(' ') %}
+        {% for tag in card.tags.split(' ') %}
             <a class="btn btn-sm btn-link px-4 me-sm-3">{{ tag }}</a>
-          {% endfor %}
+        {% endfor %}
         </div>
     </div>
 </main>

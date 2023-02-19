@@ -9,19 +9,19 @@ import global_constants as gc
 ##WTForm
 class CreateCardForm(FlaskForm):
     title = StringField("Blog Post Title", validators=[DataRequired()])
-    img_url = StringField("Blog Image URL", validators=[URL()])
-    num_views = IntegerField("Number of Views", validators=[DataRequired()])
+    img_url = StringField("Blog Image URL")
+    num_views = IntegerField("Number of Views")
     initial_frequency = IntegerField(f"Initial Frequency (1 = v. low, {gc.INITIAL_FREQUENCY_MAX} = very high, "
                                      f"default={gc.INITIAL_FREQUENCY_DEFAULT})",
                                      validators=[DataRequired(), NumberRange(min=1, max=10,
-                                                            message=f'Initial Frequency must be an integer between 1 '
-                                                                                 f'and {gc.INITIAL_FREQUENCY_MAX}')])
+                                     message=f'Initial Frequency must be an integer between 1 '
+                                             f'and {gc.INITIAL_FREQUENCY_MAX}')])
     frequency_decay = IntegerField(f"Frequency Decay (1=v. slow, {gc.FREQUENCY_DECAY_RATE_MAX} = v. fast, "
                                    f"default={gc.FREQUENCY_DECAY_DEFAULT})",
                                    validators=[DataRequired(),
-                                               NumberRange(min=1, max=gc.FREQUENCY_DECAY_RATE_MAX,
-                                                           message=f'Frequency Decay must be an integer '
-                                                                   f'between 1 and {gc.FREQUENCY_DECAY_RATE_MAX}')])
+                                   NumberRange(min=1, max=gc.FREQUENCY_DECAY_RATE_MAX,
+                                               message=f'Frequency Decay must be an integer '
+                                                       f'between 1 and {gc.FREQUENCY_DECAY_RATE_MAX}')])
     tags = StringField("Tags (use space to separate)")
     body = CKEditorField("Blog Content")
     submit = SubmitField("Submit Post")
@@ -29,8 +29,9 @@ class CreateCardForm(FlaskForm):
 
 class SkipCardForm(FlaskForm):
     days_to_skip = IntegerField("Days to skip", validators=[DataRequired(),
-                                                 NumberRange(min=1, message=f'"Number of days to skip this card" must'
-                                                                            f' be an integer greater than zero')])
+                                                            NumberRange(min=1,
+                                                                        message=f'"Number of days to skip this card" must'
+                                                                                f' be an integer greater than zero')])
     card_id = HiddenField()
     submit = SubmitField("Submit")
 

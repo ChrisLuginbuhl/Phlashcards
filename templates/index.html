@@ -30,22 +30,24 @@
         {% endfor %}
         </div>
         {% for card in all_cards %}
-        {%- if loop.index >= 10 %} That was 10! {% endif %}
-        <div class="post-preview">
-          <a href="{{ url_for('show_card', card_id=card['card_id']) }}">
-            <h2 class="post-title">
-              {{ card['title'] }}
-            </h2>
-          </a>
-          <p class="post-meta">Added by
-            {{ card['author'] }}
-            on {{ card['date_created'] }}
-            {% if is_admin %}
-            <a href="{{url_for('archive_card', rec_id=card['rec_id'], card_id=card['card_id']) }}">✘</a>
-            {% endif %}
-          </p>
-        </div>
-        <hr>
+        {%- if loop.index == 10 %} That was 10! {% endif %}
+          {% if not card['archived'] %}
+            <div class="post-preview">
+              <a href="{{ url_for('show_card', card_id=card['card_id']) }}">
+                <h2 class="post-title">
+                  {{ card['title'] }}
+                </h2>
+              </a>
+              <p class="post-meta">Added by
+                {{ card['author'] }}
+                on {{ card['date_created'] }}
+                {% if is_admin %}
+                <a href="{{url_for('archive_card', card_id=card['card_id']) }}">✘</a>
+              {% endif %}
+            </p>
+          </div>
+          <hr>
+          {% endif %}
         {% endfor %}
 
 
