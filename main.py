@@ -59,17 +59,17 @@ from loguru import logger
 # TODO 11: ---COMPLETED---Implement frequency decay rate
 # TODO 12: ---COMPLETED---Connect DB tables (author name and ID) -> maybe not? THis makes updating fields a PITA
 # TODO 13: Launch 1.0 on PAnywhere
-# TODO 14: ** Preload body and img for all cards in queue rather than retrieving one at at time
+# TODO 14: HOLD Preload body and img for all cards in queue rather than retrieving one at at time
 # TODO 15: ---COMPLETED--- Card layout (buttons always at top and bottom?)
 # TODO 16: ---COMPLETED--- Implement 'skip for x days' input
-# TODO 17: Simplify input form: fill default values for frequency decay etc
-# TODO 18: Make images (and various other fields?) optional
+# TODO 17: ---COMPLETED---Simplify input form: fill default values for frequency decay etc
+# TODO 18: ---COMPLETED---Make images (and various other fields?) optional
 # TODO 19: Dark mode: https://github.com/vinorodrigues/bootstrap-dark-5
-# TODO 20: ** Implement offline mode from local db? Read only, but refreshed on initial fill_queue?
-# TODO 21: Implement multiple page cards/series? Bootstrap carousel?
+# TODO 20: HOLD Implement offline mode from local db? Read only, but refreshed on initial fill_queue?
+# TODO 21: HOLD Implement multiple page cards/series? Bootstrap carousel?
 
 card_datafield_names = ['rec_id', 'card_id', 'num_views', 'initial_frequency', 'frequency_decay', 'weight',
-                                     'tags', 'skip_until', 'archived', 'title', 'body', 'img_url']
+                                'tags', 'skip_until', 'archived', 'date_created', 'title', 'body', 'author', 'img_url']
 Card_data = namedtuple('Card_data', card_datafield_names)
 
 cache_file = 'cache.json'
@@ -167,20 +167,22 @@ class Schedule:
         num_views = [card['num_views'] for card in card_data]
         frequency_decay = [card['frequency_decay'] for card in card_data]
         initial_frequencies = [card['initial_frequency'] if 'initial_frequency' in card.keys() else gc.INITIAL_FREQUENCY_DEFAULT for card in card_data]
+        # TODO ^v Move this default handling elsewhere
         tags = [card['tags'] if 'tags' in card.keys() else '' for card in card_data]
-        skip_until = [card['skip_until'] if 'skip_until' in card.keys() else '2023-01-01' for card
+        skip_until = [card['skip_until'] if 'skip_until' in card.keys() else gc.SKIP_UNTIL_DATE_DEFAULT for card
                       in card_data]
         archived = [card['archived'] if 'archived' in card.keys() else False for card in card_data]
         weights = [get_weight(init_freq, num_views[idx], frequency_decay[idx]) for idx, init_freq in
                    enumerate(initial_frequencies)]
 
         all_cards = [
-            Card_data(rec_ids[idx], card_id, num_views[idx], initial_frequencies[idx], frequency_decay[idx], weights[idx],
-                      tags[idx], skip_until[idx], archived[idx], None, None, None) for idx, card_id in enumerate(card_ids)]
-        # ^ The three None values are for title, body and img_url which are not loaded here to save memory
-        logger.debug(all_cards)
+            Card_data(rec_ids[idx], card_id, num_views[idx], initial_frequencies[idx], frequency_decay[idx],
+                      weights[idx],
+                      tags[idx], skip_until[idx], archived[idx], None, None, None, None, None) for idx, card_id in
+            enumerate(card_ids)]
+        # ^ The None values are for title, date_created, body, author and img_url which are not loaded here to save memory
         # ^ List comp of named tuples "Card_data"
-        # write_cache(all_cards)
+        logger.debug(f'Loaded all cards. First one: {all_cards[0]}')
         today = dt.date.today()
         ids_of_cards_in_queue = [card.card_id for card in self.queue]
         self.eligible_cards = [
@@ -228,9 +230,11 @@ class Schedule:
         return next_card
 
     def skip_card(self, card_id: int, days_to_skip: int):
+
+        # TODO Next: Modify this function to find card in db, not in queue, commit change right away
+
         try:
             queue_position = [i for i, card in enumerate(self.queue) if card.card_id == card_id][0]
-            #TODO ^ why is this a list comp?
             logger.debug(f'Found card to skip in queue position {queue_position}')
             self.queue[queue_position] = self.queue[queue_position]._replace(skip_until=str(dt.date.today() +
                                                                                 dt.timedelta(days=days_to_skip)))
@@ -238,7 +242,7 @@ class Schedule:
                 f"Changed card {card_id}'s skip until to {str(dt.date.today() + dt.timedelta(days=days_to_skip))}")
             # ^ named tuples are immutable so must replace the whole tuple
         except IndexError:
-            logger.error(f'Index Error while skipping card {card_id}')
+            logger.error(f'Index Error while skipping card {card_id}. Not skipping.')
 
     def update_db(self):
         updates_list = [{'id': card.rec_id, "fields": {"num_views": card.num_views + 1, "skip_until": card.skip_until}}
@@ -275,15 +279,19 @@ def check_is_url_image(image_url):
 def sanitize(raw_title, raw_body, raw_img_url):
     """uses library bleach to remove html tags (including malicious scripts) and performs other checks on form input
     There are no checks within db or on output."""
-    body = clean(raw_body, tags=['em', 'p', 'i', 'br'])
-    title = clean(raw_title)
-    img_url = check_is_url_image(raw_img_url)
+    img_url = ''
+    body = clean(raw_body, tags=['em', 'i', 'br'], strip=True)
+    # body = clean(raw_body, tags=['em', 'p', 'i'])
+    title = clean(raw_title, strip=True)
+    if raw_img_url:
+        img_url = check_is_url_image(raw_img_url)
     return title, body, img_url
 
 
 def default_if_none(freq_decay=gc.FREQUENCY_DECAY_DEFAULT, n_views=0,
-                    init_freq=gc.INITIAL_FREQUENCY_DEFAULT):
-    return freq_decay, n_views, init_freq
+                    init_freq=gc.INITIAL_FREQUENCY_DEFAULT,
+                    s_until=dt.datetime.strptime(gc.SKIP_UNTIL_DATE_DEFAULT, '%Y-%m-%d')):
+    return freq_decay, n_views, init_freq, s_until
 
 
 def make_hash(password):  # returns 'method:salt:hash'
@@ -374,9 +382,9 @@ def admin_only(func):
     #  an-existing-endpoint-functi
     def wrapper(*args, **kwargs):
         if not is_admin() or current_user.is_anonymous:
-            # flash('403 Not authorized. Please log in as admin')
-            # return redirect(url_for('login'), 403)
-            abort(403)
+            flash('403 Not authorized. Please log in as admin')
+            return redirect(url_for('login'), 403)
+            # abort(403)
         return func(*args, **kwargs)
 
     return wrapper
@@ -400,7 +408,7 @@ def register():
         user_data_raw = user_table.first(formula=formula)
         if user_data_raw:
             user_data = user_data_raw['fields']
-            print(f'Trying to add email: {request.form.get("email")}. Found: {user_data["email"]}')
+            logger.error(f'Trying to add email: {request.form.get("email")}. Found: {user_data["email"]}')
             flash('Email already in use. Log in instead')
             return redirect(url_for('login'))
         response_from_db = user_table.create(
@@ -408,7 +416,7 @@ def register():
              'email': request.form.get('email').lower(),
              'password_hash': make_hash(request.form.get('password'))},
         )
-        print(f'Registered new user with database: {response_from_db}')
+        logger.info(f'Registered new user with database: {response_from_db}')
         user_data = response_from_db['fields']
         user = User(
             id=user_data['user_id'],
@@ -443,7 +451,7 @@ def login():
             email=user_data['email'],
             password_hash=user_data['password_hash']
         )
-        print(f'User: {user}')
+        logger.info(f'User: {user}')
         if user:
             if check_password_hash(user.password_hash, request.form.get('password')):
                 login_user(user)
@@ -480,7 +488,6 @@ def show_card():
                      f'days to skip: {skip_form.days_to_skip.data}, type: {type(skip_form.days_to_skip.data)}')
         sched.skip_card(int(skip_form.card_id.data), skip_form.days_to_skip.data)
         return redirect(url_for("show_card", card_id=card_id))
-    #TODO NEXT: Figure out why card['tags'] is missing from data sent to card_and image.html
     logger.debug(f'Card data passed to template: Card {requested_card["card_id"]}: {requested_card["title"]}')
     return render_template("card_and_image.html",
                            card=requested_card,
@@ -494,18 +501,14 @@ def show_card():
 @app.route('/index', methods=['GET', 'POST'])
 # @logged_in_only
 def get_all_cards():
-    # TODO: filter tags
-    # if requests.method == 'POST':
-    #   Filter tags
-
-    all_tags = []
     try:
         card_data_raw = card_table.all(
             fields=['card_id', 'title', 'body', 'author', 'skip_until', 'tags', 'date_created', 'archived'])
         if card_data_raw:
-            card_data_unsorted = [card["fields"] for card in card_data_raw]
+
+            card_data_unsorted = [add_missing(card) for card in card_data_raw]
             card_data = sorted(card_data_unsorted, key=lambda card: card['card_id'])
-            all_tags_nested = [card['tags'].split(' ') for card in card_data]  # a list of lists
+            all_tags_nested = [card['tags'].split(' ') for card in card_data if card['tags']]  # a list of lists
             all_tags = set([item for sublist in all_tags_nested for item in sublist]) # Produces set from flattened list
             # ^ Is essentially a nested loop, i.e. for sublist in all_tags_nested: for item in sublist: yield item
             logger.debug(f'All tags {all_tags}')
@@ -529,26 +532,32 @@ def get_all_cards():
 def add_new_card():
     form = CreateCardForm(num_views=0,
                           initial_frequency=gc.INITIAL_FREQUENCY_DEFAULT,
-                          frequency_decay=gc.FREQUENCY_DECAY_DEFAULT)
+                          frequency_decay=gc.FREQUENCY_DECAY_DEFAULT,
+                          skip_until=dt.datetime.strptime(gc.SKIP_UNTIL_DATE_DEFAULT, '%Y-%m-%d'))
     if form.validate_on_submit():
         # clean_html_body = BeautifulSoup(form.body.data).get_text()
         title, body, img_url = sanitize(form.title.data, form.body.data, form.img_url.data)
         logger.debug(f'Form returned: frequency_decay {form.frequency_decay.data}, num_views {form.num_views.data}, '
-                     f'initial_frequency {form.initial_frequency.data}.')
-        frequency_decay, num_views, initial_frequency = default_if_none(form.frequency_decay.data, form.num_views.data,
-                                                                        form.initial_frequency.data)
+                     f'initial_frequency {form.initial_frequency.data}, skip_until {form.skip_until.data}, type {type(form.skip_until.data)}.')
+        frequency_decay, num_views, initial_frequency, skip_until_response = default_if_none(form.frequency_decay.data,
+                                                form.num_views.data, form.initial_frequency.data, form.skip_until.data)
+        skip_until = skip_until_response.strftime('%Y-%m-%d')
         logger.debug(f'After checking for "None" values, we have {frequency_decay},'
-                     f'{num_views}, {initial_frequency}')
+                     f'{num_views}, {initial_frequency}, {skip_until}')
         response = card_table.create({
             'title': title,
             'img_url': img_url,
             'author': current_user.user_name,
             'body': body,
-            'num_views': form.num_views.data,
-            'initial_frequency': form.initial_frequency.data,
-            'frequency_decay': form.frequency_decay.data,
+            'num_views': num_views,
+            'initial_frequency': initial_frequency,
+            'frequency_decay': frequency_decay,
+            'tags': clean(form.tags.data, strip=True),
+            'skip_until': skip_until,
         })
+
         logger.info(f'New card created. Response: {response}')
+        flash('New card created successfully')
         return redirect(url_for("get_all_cards"))
     return render_template("new-card.html", form=form)
 
@@ -559,13 +568,14 @@ def edit_card(card_id):
     formula = match({'card_id': card_id})
     card_data_raw = card_table.first(formula=formula)
     rec_id = card_data_raw['id']
-    # TODO: rec_id is already in sched's queue object. Don't need this query ^
     if card_data_raw:
-        card = card_data_raw['fields']
-        print(card)
+        card = add_missing(card_data_raw)
+        logger.debug(f'Retrieved card from database: {card}')
     else:
         flash('404: Link does not exist/no such card')
+        logger.error('404: Link does not exist/no such card')
         return redirect(url_for('show_card'), 404)
+
     edit_form = CreateCardForm(
         title=card['title'],
         img_url=card['img_url'],
@@ -574,20 +584,34 @@ def edit_card(card_id):
         num_views=card['num_views'],
         initial_frequency=card['initial_frequency'],
         frequency_decay=card['frequency_decay'],
+        skip_until=dt.datetime.strptime(gc.SKIP_UNTIL_DATE_DEFAULT, '%Y-%m-%d'),
         tags=card['tags']
     )
     if edit_form.validate_on_submit():
         title, body, img_url = sanitize(edit_form.title.data, edit_form.body.data, edit_form.img_url.data)
+        logger.debug(
+            f'Form returned: frequency_decay {edit_form.frequency_decay.data}, num_views {edit_form.num_views.data}, '
+            f'initial_frequency {edit_form.initial_frequency.data}, skip_until_response {edit_form.skip_until.data}, '
+            f'type {type(edit_form.skip_until.data)}.')
+        frequency_decay, num_views, initial_frequency, skip_until_response = default_if_none(
+            edit_form.frequency_decay.data,
+            edit_form.num_views.data,
+            edit_form.initial_frequency.data,
+            edit_form.skip_until.data)
+        skip_until = skip_until_response.strftime('%Y-%m-%d')
+        logger.debug(f'After checking for "None" values, we have {frequency_decay},'
+                     f'{num_views}, {initial_frequency}, {skip_until}')
         card_table.update(
             rec_id,
             {
                 'title': title,
                 'img_url': img_url,
                 'body': body,
-                'num_views': edit_form.num_views.data,
-                'initial_frequency': edit_form.initial_frequency.data,
-                'frequency_decay': edit_form.frequency_decay.data,
-                'tags': edit_form.tags.data,
+                'num_views': num_views,
+                'initial_frequency': initial_frequency,
+                'frequency_decay': frequency_decay,
+                'tags': clean(edit_form.tags.data, strip=True),
+                'skip_until': skip_until
             })
         return redirect(url_for("show_card", card_id=card_id))
     return render_template("new-card.html", logged_in=current_user.is_authenticated, is_edit=True, form=edit_form,
@@ -597,11 +621,15 @@ def edit_card(card_id):
 @app.route("/archive-card/<int:card_id>")
 @admin_only
 def archive_card(card_id):
-    rec_id = card_table.first(formula=match({"card_id": card_id}))['card_id']
+    rec_id = card_table.first(formula=match({"card_id": card_id}))['id']
     logger.debug(f'Found card to archive. Rec ID is: {rec_id}')
-    card_table.update(rec_id, {'archived': True})
-
-    return redirect(url_for('get_all_cards'))
+    try:
+        card_table.update(rec_id, {'archived': True})
+        logger.info(f'Card {card_id} archived successfully')
+    except ConnectionError:
+        flash('Unable to connect to database')
+        logger.error('Unable to connect to database')
+    return redirect(url_for('show_card'))
 
 
 @app.route("/about")

@@ -1,5 +1,5 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, SubmitField, IntegerField, PasswordField, HiddenField
+from wtforms import StringField, SubmitField, IntegerField, PasswordField, HiddenField, DateField
 from wtforms.validators import DataRequired, URL, NumberRange
 from flask_ckeditor import CKEditorField
 import global_constants as gc
@@ -24,14 +24,15 @@ class CreateCardForm(FlaskForm):
                                                        f'between 1 and {gc.FREQUENCY_DECAY_RATE_MAX}')])
     tags = StringField("Tags (use space to separate)")
     body = CKEditorField("Blog Content")
+    skip_until = DateField(f"Skip Until YYYY-mm-dd (default: don't skip): ")
     submit = SubmitField("Submit Post")
 
 
 class SkipCardForm(FlaskForm):
     days_to_skip = IntegerField("Days to skip", validators=[DataRequired(),
-                                                            NumberRange(min=1,
-                                                                        message=f'"Number of days to skip this card" must'
-                                                                                f' be an integer greater than zero')])
+                                                        NumberRange(min=1,
+                                                                    message=f'"Number of days to skip this card" must'
+                                                                            f' be an integer greater than zero')])
     card_id = HiddenField()
     submit = SubmitField("Submit")
 

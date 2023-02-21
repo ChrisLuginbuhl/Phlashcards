@@ -12,9 +12,10 @@
           <div class="page-heading">
             {% if is_edit: %}
             <h1>Edit Flashcard</h1>
+            <span class="subheading">Card # {{ card.card_id }}</span>
             {% else: %}
             <h1>New Flashcard</h1>
-            <span class="subheading">You're going to make a great flashcard!</span>
+            <span class="subheading">Make a great Phlashcard</span>
             {% endif %}
           </div>
         </div>
@@ -30,8 +31,8 @@
         {{ ckeditor.config(name='body') }}
         {{ wtf.quick_form(form, novalidate=True, button_map={"submit": "primary", "cancel": "success"}) }}
         {% if is_edit: %}
-          <br><br>
-          <h3>Tags: </h3>
+<!--          <br><br>-->
+          <h3 class="py-5">Tags: </h3>
           {% for tag in card.tags.split(' ') %}
             <a class="btn btn-sm btn-link px-4 me-sm-3">{{ tag }}</a>
           {% endfor %}

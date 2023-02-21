@@ -30,7 +30,6 @@
         {% endfor %}
         </div>
         {% for card in all_cards %}
-        {%- if loop.index == 10 %} That was 10! {% endif %}
           {% if not card['archived'] %}
             <div class="post-preview">
               <a href="{{ url_for('show_card', card_id=card['card_id']) }}">
