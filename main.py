@@ -145,20 +145,22 @@ class Schedule:
     # fill queue from eligible cards
 
     def __init__(self):
-        self.index = 0
+        self.index = -1
         self.queue = []
         self.eligible_cards = []
         self.excluded_tags = ['Language']
 
+    @logger.catch()
     def fill_queue(self):
         """Retrieves selected fields for all db records, calculates weights, makes list of eligible cards, fills queue"""
         try:
             card_data_raw = card_table.all(fields=['card_id', 'num_views', 'initial_frequency', 'frequency_decay', 'tags',
                                                'skip_until', 'archived'])
             card_data = [add_missing(card) for card in card_data_raw]
-            logger.debug(f'card_data first item: {card_data[0]}')
+            logger.debug(f'Retrieved Card_data from db: {len(card_data)} items. First item: {card_data[0]}')
         except ConnectionError:
             logger.error("Connection Error: Unable to reach database.")
+            flash("Connection Error: Unable to reach database.")
             # TODO: Load cached data
             # card_data = read_cache()
         #Unpack json into a bunch of lists.
@@ -210,25 +212,26 @@ class Schedule:
                     f'queue of {gc.QUEUE_SIZE}')
         logger.info(f'queue is: {[card.card_id for card in self.queue]}')
 
+    @logger.catch()
     def get_next_card(self) -> Card_data:
         if not self.queue:  # Queue is empty when the app first opens
             self.fill_queue()
-        next_card = self.queue[self.index]
-        if self.index == gc.QUEUE_SIZE - 1:
+
+        self.index += 1
+        if self.index == gc.QUEUE_SIZE:
             self.update_db()
             self.fill_queue()
             self.index = 0
-        else:
-            self.index += 1
+        next_card = self.queue[self.index]
         logger.info(f'Next card: {next_card.card_id}. '
-              f'Num_views: {next_card.num_views}',
-              f'Init_freq: {next_card.initial_frequency}, '
-              f'Decay rate: {next_card.frequency_decay}, '
-              f'Weight: {next_card.weight}, '
-              f'Tags: {next_card.tags}')
-
+                    f'Num_views: {next_card.num_views}, '
+                    f'Init_freq: {next_card.initial_frequency}, '
+                    f'Decay rate: {next_card.frequency_decay}, '
+                    f'Weight: {next_card.weight}, '
+                    f'Tags: {next_card.tags}')
         return next_card
 
+    @logger.catch()
     def skip_card(self, card_id: int, days_to_skip: int):
 
         # TODO Next: Modify this function to find card in db, not in queue, commit change right away
@@ -254,6 +257,7 @@ class Schedule:
             logger.error("Connection Error: Unable to reach database.")
 
 # HELPER FUNCTIONS
+@logger.catch()
 def check_is_url_image(image_url):
     image_formats = ("image/png", "image/jpeg", "image/jpg")
     # TODO: Add/test GIF to image formats ^
@@ -276,28 +280,33 @@ def check_is_url_image(image_url):
     # return gc.BROKEN_LINK_IMG_URL
     return None
 
+
+@logger.catch()
 def sanitize(raw_title, raw_body, raw_img_url):
     """uses library bleach to remove html tags (including malicious scripts) and performs other checks on form input
     There are no checks within db or on output."""
     img_url = ''
-    body = clean(raw_body, tags=['em', 'i', 'br'], strip=True)
-    # body = clean(raw_body, tags=['em', 'p', 'i'])
+    # body = clean(raw_body, tags=['em', 'i', 'br'], strip=True)
+    body = clean(raw_body, tags=['em', 'p', 'br', 'i'], strip=True)
     title = clean(raw_title, strip=True)
     if raw_img_url:
         img_url = check_is_url_image(raw_img_url)
     return title, body, img_url
 
 
+@logger.catch()
 def default_if_none(freq_decay=gc.FREQUENCY_DECAY_DEFAULT, n_views=0,
                     init_freq=gc.INITIAL_FREQUENCY_DEFAULT,
                     s_until=dt.datetime.strptime(gc.SKIP_UNTIL_DATE_DEFAULT, '%Y-%m-%d')):
     return freq_decay, n_views, init_freq, s_until
 
 
+@logger.catch()
 def make_hash(password):  # returns 'method:salt:hash'
     return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
 
 
+@logger.catch()
 def get_weight(initial_freq: int, num_views: int, decay_rate: int) -> float:
     """returns weight used to randomly select a card. A card's probablility of selection decreases logarithmically
     with num_views. The rate of decay is determined by decay_rate from 1-10. Higher decay_rate makes
@@ -312,6 +321,7 @@ def get_weight(initial_freq: int, num_views: int, decay_rate: int) -> float:
     return weight
 
 
+@logger.catch()
 def add_missing(card: dict) -> dict:
     """
     Card records from database have this structure:
@@ -336,9 +346,9 @@ def add_missing(card: dict) -> dict:
     updated_card['rec_id'] = card['id'] # returning a flattened dict where 'rec_id' is placed at same level as 'card_id'
     return updated_card
 
-
-
-
+def single_newlines(bd):
+    """Removes multiple newlines from body text that are inserted by CKEditor"""
+    pass
 # TODO: Add body of posts to cache
 def write_cache(all_cards):
     with open(cache_file, 'w') as cache:
@@ -354,15 +364,19 @@ def read_cache():
 
 
 # This function is required by Flask Login Manager.
+@logger.catch()
 @login_manager.user_loader
 def load_user(id):
-    user_data = user_table.first(formula=match({"user_id": id}))['fields']
-    user = User(
-        id=user_data['user_id'],
-        user_name=user_data['user_name'],
-        email=user_data['email'],
-        password_hash=user_data['password_hash']
-    )
+    try:
+        user_data = user_table.first(formula=match({"user_id": id}))['fields']
+        user = User(
+            id=user_data['user_id'],
+            user_name=user_data['user_name'],
+            email=user_data['email'],
+            password_hash=user_data['password_hash']
+        )
+    except ConnectionError:
+        logger.error(f'Connection Error. Unable to load user from id.')
     return user
 
 
@@ -370,8 +384,7 @@ def is_admin():
     # User with id 1 in database is the admin for the blog
     if current_user.is_authenticated and current_user.id == 1:
         return True
-    else:
-        return False
+    return False
 
 
 # Decorator functions
@@ -394,43 +407,53 @@ def logged_in_only(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         if not current_user.is_authenticated:
+            logger.warning('This function requires log in. Redirected to login.')
+            flash('You must be logged in')
             return redirect(url_for('login'))
         return func(*args, **kwargs)
-
     return wrapper
 
 
+@logger.catch()
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     form = RegisterForm()
     if form.validate_on_submit():
         formula = match({"email": request.form.get('email').lower()})
-        user_data_raw = user_table.first(formula=formula)
+        try:
+            user_data_raw = user_table.first(formula=formula)
+        except ConnectionError:
+            logger.error("Connection error. Unable to connect to database.")
         if user_data_raw:
             user_data = user_data_raw['fields']
             logger.error(f'Trying to add email: {request.form.get("email")}. Found: {user_data["email"]}')
             flash('Email already in use. Log in instead')
             return redirect(url_for('login'))
-        response_from_db = user_table.create(
-            {'user_name': request.form.get('name'),
-             'email': request.form.get('email').lower(),
-             'password_hash': make_hash(request.form.get('password'))},
-        )
-        logger.info(f'Registered new user with database: {response_from_db}')
-        user_data = response_from_db['fields']
-        user = User(
-            id=user_data['user_id'],
-            user_name=user_data['user_name'],
-            email=user_data['email'],
-            password_hash=user_data['password_hash']
-        )
-        # user.id = user.user_id
-        login_user(user)
-        flash('Registered and logged in')
-        return redirect(url_for('get_all_cards'))
+        try:
+            response_from_db = user_table.create(
+                {'user_name': request.form.get('name'),
+                 'email': request.form.get('email').lower(),
+                 'password_hash': make_hash(request.form.get('password'))},
+            )
+            logger.info(f'Registered new user with database: {response_from_db}')
+            user_data = response_from_db['fields']
+            user = User(
+                id=user_data['user_id'],
+                user_name=user_data['user_name'],
+                email=user_data['email'],
+                password_hash=user_data['password_hash']
+            )
+            # user.id = user.user_id
+            login_user(user)
+            flash('Registered and logged in')
+            return redirect(url_for('get_all_cards'))
+        except ConnectionError:
+            logger.error('Error connecting to database.')
+            flash('Error connecting to database')
     return render_template("register.html", form=form)
 
 
+@logger.catch()
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
@@ -451,7 +474,7 @@ def login():
             email=user_data['email'],
             password_hash=user_data['password_hash']
         )
-        logger.info(f'User: {user}')
+        logger.info(f'User: {user.user_name}')
         if user:
             if check_password_hash(user.password_hash, request.form.get('password')):
                 login_user(user)
@@ -464,6 +487,7 @@ def login():
     return render_template('login.html', form=form, logged_in=current_user.is_authenticated)
 
 
+@logger.catch()
 @app.route('/logout')
 def logout():
     logout_user()
@@ -471,17 +495,21 @@ def logout():
     return redirect(url_for('login'))
 
 
+@logger.catch()
 @app.route("/", methods=['GET', 'POST'])
 # @logged_in_only
 def show_card():
     card_id = request.args.get("card_id")
     if not card_id:
         card_id = sched.get_next_card().card_id
-    requested_card_raw = card_table.first(formula=match({"card_id": card_id}))
-    requested_card = add_missing(requested_card_raw)
-    logger_text = 'Retrieved card:\n{}'.format("\n".join([str(requested_card[field]) for field in requested_card.keys()
-                                                          if field != "body"]))
-    logger.debug(logger_text)
+    try:
+        requested_card_raw = card_table.first(formula=match({"card_id": card_id}))
+        requested_card = add_missing(requested_card_raw)
+        # logger_text = 'Retrieved card:\n{}'.format("\n".join([str(requested_card[field]) for field
+        # in requested_card.keys() if field != "body"]))
+        # logger.debug(logger_text)
+    except ConnectionError:
+        logger.error('Unable to connect to database.')
     skip_form = SkipCardForm(days_to_skip=1, card_id=card_id)
     if skip_form.validate_on_submit():
         logger.debug(f'received back from form - card: {skip_form.card_id.data}, type: {type(skip_form.card_id.data)}, '
@@ -498,6 +526,7 @@ def show_card():
                            )
 
 
+@logger.catch()
 @app.route('/index', methods=['GET', 'POST'])
 # @logged_in_only
 def get_all_cards():
@@ -527,6 +556,7 @@ def get_all_cards():
     return redirect(url_for('login'))
 
 
+@logger.catch()
 @app.route("/new-card", methods=['GET', 'POST'])
 @logged_in_only
 def add_new_card():
@@ -535,47 +565,59 @@ def add_new_card():
                           frequency_decay=gc.FREQUENCY_DECAY_DEFAULT,
                           skip_until=dt.datetime.strptime(gc.SKIP_UNTIL_DATE_DEFAULT, '%Y-%m-%d'))
     if form.validate_on_submit():
-        # clean_html_body = BeautifulSoup(form.body.data).get_text()
+        # clean responses, insert defaults for None
         title, body, img_url = sanitize(form.title.data, form.body.data, form.img_url.data)
+        body = body.replace("\n\n\n", "\n\n")
         logger.debug(f'Form returned: frequency_decay {form.frequency_decay.data}, num_views {form.num_views.data}, '
                      f'initial_frequency {form.initial_frequency.data}, skip_until {form.skip_until.data}, type {type(form.skip_until.data)}.')
         frequency_decay, num_views, initial_frequency, skip_until_response = default_if_none(form.frequency_decay.data,
                                                 form.num_views.data, form.initial_frequency.data, form.skip_until.data)
         skip_until = skip_until_response.strftime('%Y-%m-%d')
-        logger.debug(f'After checking for "None" values, we have {frequency_decay},'
-                     f'{num_views}, {initial_frequency}, {skip_until}')
-        response = card_table.create({
-            'title': title,
-            'img_url': img_url,
-            'author': current_user.user_name,
-            'body': body,
-            'num_views': num_views,
-            'initial_frequency': initial_frequency,
-            'frequency_decay': frequency_decay,
-            'tags': clean(form.tags.data, strip=True),
-            'skip_until': skip_until,
-        })
-
-        logger.info(f'New card created. Response: {response}')
-        flash('New card created successfully')
-        return redirect(url_for("get_all_cards"))
+        tags = clean(form.tags.data, strip=True)
+        logger.debug(
+            f'Attempting to create card with title: {title}, img_url: {img_url}, author {current_user.user_name}, '
+            f'freq_decay: {frequency_decay}, tags: {tags}, '
+            f'num_views: {num_views}, init_freq: {initial_frequency}, skip_until: {skip_until}, body: {body}')
+        try:
+            response = card_table.create({
+                'title': title,
+                'img_url': img_url,
+                'author': current_user.user_name,
+                'body': body,
+                'num_views': num_views,
+                'initial_frequency': initial_frequency,
+                'frequency_decay': frequency_decay,
+                'tags': tags,
+                'skip_until': skip_until,
+            })
+            logger.info(f'New card created. Response: {response}')
+            new_card = add_missing(response)
+            flash('New card created successfully')
+            return redirect(url_for("show_card", card_id=new_card['card_id']))
+        except ConnectionError:
+            logger.error(f'Connection Error. Unable to connect to database. Response {response}')
+            flash(f'Connection Error. Unable to connect to database. Card not added.')
     return render_template("new-card.html", form=form)
 
 
+@logger.catch()
 @app.route("/edit-card/<int:card_id>", methods=['GET', 'POST'])
 @admin_only
 def edit_card(card_id):
     formula = match({'card_id': card_id})
-    card_data_raw = card_table.first(formula=formula)
-    rec_id = card_data_raw['id']
+    try:
+        card_data_raw = card_table.first(formula=formula)
+    except ConnectionError:
+        logger.error('Unable to connect to database')
     if card_data_raw:
         card = add_missing(card_data_raw)
-        logger.debug(f'Retrieved card from database: {card}')
+        logger.debug(f'Retrieved card to edit from database: {card}')
+        card['body'] = card['body'].replace('\n', '<br />')  # CKEditor makes \n newlines duplicate when saving edits
     else:
         flash('404: Link does not exist/no such card')
         logger.error('404: Link does not exist/no such card')
         return redirect(url_for('show_card'), 404)
-
+    logger.debug(f'Raw body text from db: {card["body"]}')
     edit_form = CreateCardForm(
         title=card['title'],
         img_url=card['img_url'],
@@ -589,35 +631,54 @@ def edit_card(card_id):
     )
     if edit_form.validate_on_submit():
         title, body, img_url = sanitize(edit_form.title.data, edit_form.body.data, edit_form.img_url.data)
-        logger.debug(
-            f'Form returned: frequency_decay {edit_form.frequency_decay.data}, num_views {edit_form.num_views.data}, '
-            f'initial_frequency {edit_form.initial_frequency.data}, skip_until_response {edit_form.skip_until.data}, '
-            f'type {type(edit_form.skip_until.data)}.')
+        # logger.debug(
+        #     f'Form returned: frequency_decay {edit_form.frequency_decay.data}, num_views {edit_form.num_views.data}, '
+        #     f'initial_frequency {edit_form.initial_frequency.data}, skip_until_response {edit_form.skip_until.data}, '
+        #     f'type {type(edit_form.skip_until.data)}.')
+
+        # body = body.replace('<br /><br /><br />', '<br />')
+        # body = body.replace('<br /><br />', '<br />')
+        # body = body.replace('<br />', '\n')
+        # body = body.replace('<br><br><br>', '<br>')
+        # body = body.replace('<br><br>', '<br>')
+        # body = body.replace('<br>', '\n')
+        # body = body.replace('\n\n\n', '\n')
+        # body = body.replace('\n\n', '\n')
+
         frequency_decay, num_views, initial_frequency, skip_until_response = default_if_none(
             edit_form.frequency_decay.data,
             edit_form.num_views.data,
             edit_form.initial_frequency.data,
             edit_form.skip_until.data)
+        tags = clean(edit_form.tags.data, strip=True)
         skip_until = skip_until_response.strftime('%Y-%m-%d')
-        logger.debug(f'After checking for "None" values, we have {frequency_decay},'
-                     f'{num_views}, {initial_frequency}, {skip_until}')
-        card_table.update(
-            rec_id,
-            {
-                'title': title,
-                'img_url': img_url,
-                'body': body,
-                'num_views': num_views,
-                'initial_frequency': initial_frequency,
-                'frequency_decay': frequency_decay,
-                'tags': clean(edit_form.tags.data, strip=True),
-                'skip_until': skip_until
-            })
+        logger.debug(
+            f'Attempting to edit card with title: {title}, img_url: {img_url}, author {current_user.user_name}, '
+            f'freq_decay: {frequency_decay}, tags: {tags}, '
+            f'num_views: {num_views}, init_freq: {initial_frequency}, skip_until: {skip_until}, body: {body}')
+        try:
+            response = card_table.update(
+                card['rec_id'],
+                {
+                    'title': title,
+                    'img_url': img_url,
+                    'body': body,
+                    'num_views': num_views,
+                    'initial_frequency': initial_frequency,
+                    'frequency_decay': frequency_decay,
+                    'tags': tags,
+                    'skip_until': skip_until
+                })
+            logger.info(f'Card updated successfully. Response: {response}')
+        except ConnectionError:
+            logger.error(f'Connection Error. Unable to connect to database. Response {response}')
+            flash(f'Connection Error. Unable to connect to database. Card not updated.')
         return redirect(url_for("show_card", card_id=card_id))
     return render_template("new-card.html", logged_in=current_user.is_authenticated, is_edit=True, form=edit_form,
                            card=card)
 
 
+@logger.catch()
 @app.route("/archive-card/<int:card_id>")
 @admin_only
 def archive_card(card_id):

@@ -8,8 +8,8 @@ import global_constants as gc
 # from main import FREQUENCY_DECAY_RATE_MAX, FREQUENCY_DECAY_DEFAULT, INITIAL_FREQUENCY_MAX, INITIAL_FREQUENCY_DEFAULT
 ##WTForm
 class CreateCardForm(FlaskForm):
-    title = StringField("Blog Post Title", validators=[DataRequired()])
-    img_url = StringField("Blog Image URL")
+    title = StringField("Title", validators=[DataRequired()])
+    img_url = StringField("Image URL (optional)")
     num_views = IntegerField("Number of Views")
     initial_frequency = IntegerField(f"Initial Frequency (1 = v. low, {gc.INITIAL_FREQUENCY_MAX} = very high, "
                                      f"default={gc.INITIAL_FREQUENCY_DEFAULT})",
@@ -23,9 +23,9 @@ class CreateCardForm(FlaskForm):
                                                message=f'Frequency Decay must be an integer '
                                                        f'between 1 and {gc.FREQUENCY_DECAY_RATE_MAX}')])
     tags = StringField("Tags (use space to separate)")
-    body = CKEditorField("Blog Content")
+    body = CKEditorField("Card Body")
     skip_until = DateField(f"Skip Until YYYY-mm-dd (default: don't skip): ")
-    submit = SubmitField("Submit Post")
+    submit = SubmitField("Submit Card")
 
 
 class SkipCardForm(FlaskForm):

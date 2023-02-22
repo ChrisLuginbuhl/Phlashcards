@@ -8,7 +8,7 @@
         <div class="col-lg-8 col-md-10 mx-auto">
           <div class="site-heading">
             <h1>Phlashcards</h1>
-            <span class="subheading">Remember faster better</span>
+            <span class="subheading">Remember Faster Better</span>
           </div>
         </div>
       </div>
@@ -21,14 +21,32 @@
     <div class="row">
       <div class="col-lg-8 col-md-10 mx-auto">
         {% include 'flash_messages.html' %}
-        <h3>Tag Filters: </h3>
-        <div class="btn-group btn-group-sm" role="group" aria-label="Checkbox toggle button group">
-        {% for tag in all_tags %}
-          <input type="checkbox" class="btn-check" id="btncheck{{ loop.index }}" autocomplete="off">
-          <label class="btn btn-sm" for="btncheck{{ loop.index }}">{{ tag }}</label>
-<!--          <a class="btn btn-sm btn-link px-4 me-sm-3">{ tag }</a>-->
-        {% endfor %}
-        </div>
+<!--        <h3>Tag Filters: </h3>-->
+<!--        <div class="container">-->
+<!--          <div class="form-check form-check-inline">-->
+<!--            <input class="form-check-input" type="checkbox" id="inlineCheckbox1" value="option1" checked>-->
+<!--            <label class="form-check-label" for="inlineCheckbox1">1</label>-->
+<!--          </div>-->
+<!--          <div class="form-check form-check-inline">-->
+<!--            <input class="form-check-input" type="checkbox" id="inlineCheckbox2" value="option2">-->
+<!--            <label class="form-check-label" for="inlineCheckbox2">2</label>-->
+<!--          </div>-->
+<!--          <div class="form-check form-check-inline">-->
+<!--            <input class="form-check-input" type="checkbox" id="inlineCheckbox3" value="option3" disabled>-->
+<!--            <label class="form-check-label" for="inlineCheckbox3">3 (disabled)</label>-->
+<!--          </div>-->
+<!--          <form method="post">-->
+<!--            <input type="submit" value="Click Me">-->
+<!--          </form>-->
+<!--        </div>-->
+
+<!--        <div class="btn-group btn-group-sm" role="group" aria-label="Checkbox toggle button group">-->
+<!--        {% for tag in all_tags %}-->
+<!--          <input type="checkbox" class="btn-check" id="btncheck{{ loop.index }}" autocomplete="off">-->
+<!--          <label class="btn btn-sm" for="btncheck{{ loop.index }}">{{ tag }}</label>-->
+<!--&lt;!&ndash;          <a class="btn btn-sm btn-link px-4 me-sm-3">{ tag }</a>&ndash;&gt;-->
+<!--        {% endfor %}-->
+<!--        </div>-->
         {% for card in all_cards %}
           {% if not card['archived'] %}
             <div class="post-preview">
