@@ -1,8 +1,8 @@
 <!--Formatting of posts can be tricky. We are using <p> tags rather than \n or <br>.
 clean-blog.css has a margin property for <p> text. We have also turned off CKEditor's default behaviour of adding
 newlines after <p> in CKEditorFormatting.js.
-When editing cards, pre-filling CKEDitor text area strips \n newlines, meaning all newlines are lost after any
-edit. Replacing them with <br> works, but it's default is to add a newline after that tag so the newlines multiply
+When editing cards, pre-filling CKEditor text area strips \n newlines, meaning all newlines are lost after any
+edit. Replacing them with <br> works, but its default is to add a newline after that tag so the newlines multiply
 every time you edit the card. CKEditorFormatting.js overrides this behaviour as well.
 
   -->
@@ -26,7 +26,7 @@ every time you edit the card. CKEditorFormatting.js overrides this behaviour as 
         {% include 'flash_messages.html' %}
         <div class="col-lg-6 py-3 mx-auto">
 <!--        <div class="lead mb-4 preserve-newline-->
-        <div class="lead preserve-newline mb-4
+        <div class="lead preserve-newline
       {% if dark_mode %}
         bg-dark text-secondary px-4 py-5 text-center
       {% endif %}

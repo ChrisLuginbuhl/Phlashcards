@@ -1,14 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="cba5b64e-3764-44de-9518-e0674933086a" name="Changes" comment="Add 'skip until' date to New Card and Edit Card forms. Improve formatting of cards. Add Archive button.">
+    <list default="true" id="cba5b64e-3764-44de-9518-e0674933086a" name="Changes" comment="Fix Edit bug by modifying order of operations in fill_queue(). Fix formattin (newline) errors that pile up in cards when edited repeatedly">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/forms.py" beforeDir="false" afterPath="$PROJECT_DIR$/forms.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/static/css/clean-blog.css" beforeDir="false" afterPath="$PROJECT_DIR$/static/css/clean-blog.css" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/templates/card_and_image.html" beforeDir="false" afterPath="$PROJECT_DIR$/templates/card_and_image.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/templates/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/templates/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/templates/new-card.html" beforeDir="false" afterPath="$PROJECT_DIR$/templates/new-card.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -193,7 +189,21 @@
       <option name="project" value="LOCAL" />
       <updated>1676952733501</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="Fix Edit bug by modifying order of operations in fill_queue(). Fix formattin (newline) errors that pile up in cards when edited repeatedly">
+      <created>1677037152901</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1677037152901</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Fix Edit bug by modifying order of operations in fill_queue(). Fix formattin (newline) errors that pile up in cards when edited repeatedly">
+      <created>1677037210644</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1677037210644</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -230,7 +240,8 @@
     <MESSAGE value="Add option to skip card for a number of days" />
     <MESSAGE value="Allow missing fields &amp; add defaults, card layout improvements, implement loguru" />
     <MESSAGE value="Add 'skip until' date to New Card and Edit Card forms. Improve formatting of cards. Add Archive button." />
-    <option name="LAST_COMMIT_MESSAGE" value="Add 'skip until' date to New Card and Edit Card forms. Improve formatting of cards. Add Archive button." />
+    <MESSAGE value="Fix Edit bug by modifying order of operations in fill_queue(). Fix formattin (newline) errors that pile up in cards when edited repeatedly" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fix Edit bug by modifying order of operations in fill_queue(). Fix formattin (newline) errors that pile up in cards when edited repeatedly" />
   </component>
   <component name="XDebuggerManager">
     <watches-manager>
